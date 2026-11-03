@@ -1274,6 +1274,32 @@ function PatientTicketPage({
   onStopSpeech,
 }) {
   const [lookupInput, setLookupInput] = useState("");
+  const [rating, setRating] = useState(null);
+  const [ratingSubmitted, setRatingSubmitted] = useState(false);
+
+  const satisfactionOptions = [
+    { score: 1, emoji: "😡", label: "ไม่พอใจมาก", color: "hover:border-red-500 hover:bg-red-50 text-red-600" },
+    { score: 2, emoji: "🙁", label: "ไม่พอใจ", color: "hover:border-orange-500 hover:bg-orange-50 text-orange-600" },
+    { score: 3, emoji: "😐", label: "ปานกลาง", color: "hover:border-amber-500 hover:bg-amber-50 text-amber-600" },
+    { score: 4, emoji: "🙂", label: "พอใจ", color: "hover:border-emerald-500 hover:bg-emerald-50 text-emerald-600" },
+    { score: 5, emoji: "😄", label: "พอใจมาก", color: "hover:border-green-600 hover:bg-green-50 text-green-600" },
+  ];
+
+  function handleRate(score) {
+    setRating(score);
+    setRatingSubmitted(true);
+    try {
+      const existing = JSON.parse(localStorage.getItem("joe_imed_ratings") || "[]");
+      existing.push({
+        score,
+        ticket: ticket?.queueNumber || "UNKNOWN",
+        timestamp: new Date().toISOString(),
+      });
+      localStorage.setItem("joe_imed_ratings", JSON.stringify(existing));
+    } catch {
+      // Ignore localStorage errors
+    }
+  }
 
   if (!ticket) {
     return (
@@ -1481,7 +1507,7 @@ function PatientTicketPage({
               border: "1px solid #E2E8F0",
               borderRadius: "6px",
               padding: "1rem 1.25rem",
-              marginBottom: "1.5rem",
+              marginBottom: "1.25rem",
             }}
           >
             <div style={{ fontSize: "0.825rem", fontWeight: 700, color: "#0F172A", marginBottom: "0.4rem" }}>
@@ -1492,6 +1518,41 @@ function PatientTicketPage({
               <li>เดินทางไปยังจุดซักประวัติของ <strong style={{ color: "#0F172A" }}>แผนก{ticket.department || "อายุรกรรม"}</strong></li>
               <li>หากมีอาการผิดปกติรุนแรงขึ้นระหว่างรอคิว กรุณาแจ้งพยาบาลประจำจุดคัดกรองทันที</li>
             </ol>
+          </div>
+
+          {/* Smiley Satisfaction Rating Box (Hospital Kiosk Feedback Terminal) */}
+          <div className="mb-6 rounded-md border border-slate-200 bg-slate-50 p-4 text-center">
+            <div className="text-xs sm:text-sm font-bold text-slate-900 mb-1">
+              ประเมินความพึงพอใจการใช้บริการตู้คัดกรองอัตโนมัติ
+            </div>
+            <p className="text-xs text-slate-500 mb-3">
+              ความคิดเห็นของท่านช่วยพัฒนาการบริการของโรงพยาบาลให้ดียิ่งขึ้น
+            </p>
+
+            {ratingSubmitted ? (
+              <div className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs sm:text-sm font-semibold text-emerald-800">
+                <span>✓</span>
+                <span>ขอบพระคุณสำหรับข้อเสนอแนะในการรับบริการ (คะแนน: {rating}/5)</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-5 gap-1.5 sm:gap-2.5 max-w-md mx-auto">
+                {satisfactionOptions.map((opt) => (
+                  <button
+                    key={opt.score}
+                    type="button"
+                    onClick={() => handleRate(opt.score)}
+                    className={`flex flex-col items-center justify-center p-2 sm:p-2.5 rounded-md border border-slate-200 bg-white transition-all transform active:scale-95 ${opt.color}`}
+                  >
+                    <span className="text-2xl sm:text-3xl leading-none mb-1 select-none">
+                      {opt.emoji}
+                    </span>
+                    <span className="text-[10px] sm:text-xs font-semibold text-slate-700 leading-tight">
+                      {opt.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
