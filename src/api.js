@@ -276,3 +276,145 @@ Respond with:
   // 3. Fallback: Instant Medical Rule-Based Triage Engine (100% reliable, zero downtime)
   return generateClinicalTriage(patientForm);
 }
+
+// ─── VOICE-TO-QUEUE NATURAL LANGUAGE EXTRACTOR (THAI SPEECH PARSER) ───────────
+export function parseVoicePatientTranscript(rawTranscript = "") {
+  const text = String(rawTranscript || "").trim();
+
+  // 1. Extract Age (เช่น "อายุ 72 ปี" หรือ "72 ปี")
+  let age = "65";
+  const ageMatch =
+    text.match(/อายุ\s*(\d{1,3})\s*(?:ปี|ขวบ)?/) ||
+    text.match(/(\d{2,3})\s*ปี/);
+  if (ageMatch && ageMatch[1]) {
+    age = ageMatch[1];
+  }
+
+  // 2. Extract Gender
+  let gender = "ไม่ระบุ";
+  if (/(นาย|ลุง|ตา|ปู่|คุณพ่อ|ผู้ชาย|เพศชาย|ผมชื่อ|กระผม)/.test(text)) {
+    gender = "ชาย";
+  } else if (/(นางสาว|นาง|ยาย|ป้า|ย่า|คุณแม่|ผู้หญิง|เพศหญิง|ดิฉัน|หนูชื่อ|ฉันชื่อ)/.test(text)) {
+    gender = "หญิง";
+  }
+
+  // 3. Extract Name (เช่น "ชื่อสมศรี ใจดี" หรือ "ชื่อนายสมชาย รักไทย")
+  let firstName = "ผู้รับบริการ";
+  let lastName = "(แจ้งด้วยเสียง)";
+  const nameMatch = text.match(
+    /(?:ชื่อ|ผม|ดิฉัน|ยาย|ลุง|ป้า|ตา|นาย|นางสาว|นาง)\s*([ก-๙]{2,20})(?:\s+([ก-๙]{2,20}))?/
+  );
+  if (nameMatch && nameMatch[1]) {
+    const cleanedFirst = nameMatch[1]
+      .replace(/^(ชื่อ|นาย|นางสาว|นาง|คุณ|ยาย|ลุง|ป้า|ตา)/, "")
+      .trim();
+    if (cleanedFirst.length >= 2 && !["อายุ", "ปวด", "เจ็บ", "เป็น", "มีไข้"].includes(cleanedFirst)) {
+      firstName = cleanedFirst;
+      const candidateLast = (nameMatch[2] || "").trim();
+      if (
+        candidateLast &&
+        !candidateLast.startsWith("อายุ") &&
+        !candidateLast.startsWith("ปวด") &&
+        !candidateLast.startsWith("มี") &&
+        !candidateLast.startsWith("เป็น") &&
+        !candidateLast.startsWith("สิทธิ")
+      ) {
+        lastName = candidateLast;
+      } else {
+        lastName = "";
+      }
+    }
+  }
+
+  // 4. Extract Benefit Type (สิทธิการรักษา)
+  let benefitType = "บัตรทอง / สวัสดิการรัฐ";
+  if (/(ประกันสังคม)/.test(text)) {
+    benefitType = "ประกันสังคม";
+  } else if (/(ข้าราชการ|เบิกตรง|สวัสดิการข้าราชการ)/.test(text)) {
+    benefitType = "สิทธิสวัสดิการ";
+  } else if (/(จ่ายเอง|เงินสด|ชำระเอง)/.test(text)) {
+    benefitType = "เบิกตรง / จ่ายเอง";
+  } else if (/(ประกันเอกชน|ประกันชีวิต)/.test(text)) {
+    benefitType = "ประกันภาคเอกชน";
+  } else if (/(ผู้สูงอายุ|สูงอายุ|บัตรทอง|30\s*บาท|สามสิบบาท|สวัสดิการรัฐ)/.test(text)) {
+    benefitType = "บัตรทอง / สวัสดิการรัฐ";
+  }
+
+  // 5. Extract Symptoms
+  const symptoms = [];
+  const rules = [
+    ["fever", /(ไข้|ตัวร้อน|หนาวสั่น)/],
+    ["cough", /(ไอ|เจ็บคอ|เสมหะ)/],
+    ["headache", /(ปวดหัว|ปวดศีรษะ|มึนหัว)/],
+    ["chest", /(เจ็บหน้าอก|แน่นหน้าอก|จุกหน้าอก)/],
+    ["breath", /(หายใจลำบาก|หายใจไม่ออก|หายใจไม่สะดวก|เหนื่อยหอบ|หอบ)/],
+    ["nausea", /(คลื่นไส้|อาเจียน|อ้วก|พะอืดพะอม)/],
+    ["dizziness", /(เวียนหัว|หน้ามืด|บ้านหมุน|ตาลาย)/],
+    ["fatigue", /(อ่อนเพลีย|ไม่มีแรง|เพลีย)/],
+    ["pain", /(ปวดหลัง|ปวดเอว|ปวดเข่า|ปวดขา|ปวดกล้ามเนื้อ|ปวดเมื่อย|ปวดท้อง)/],
+    ["rash", /(ผื่น|คัน|ลมพิษ)/],
+    ["swelling", /(บวม|ขาบวม|หน้าบวม)/],
+  ];
+
+  for (const [id, regex] of rules) {
+    if (regex.test(text)) {
+      symptoms.push(id);
+    }
+  }
+  if (symptoms.length === 0) {
+    symptoms.push("fatigue");
+  }
+
+  // 6. Determine Severity
+  let severity = "mid";
+  if (
+    symptoms.includes("chest") ||
+    symptoms.includes("breath") ||
+    /(ฉุกเฉิน|รุนแรง|มาก|ทนไม่ไหว|หมดสติ|ชัก|เลือดออก)/.test(text)
+  ) {
+    severity = "high";
+  } else if (symptoms.length === 1 && !/(มาก|รุนแรง|หลายวัน)/.test(text)) {
+    severity = "low";
+  }
+
+  // 7. Extract Medical History / Allergies if mentioned
+  let medHistory = "";
+  const histMatch = text.match(/(?:โรคประจำตัว|เป็นโรค)\s*([ก-๙\s]{2,30})/);
+  if (histMatch && histMatch[1]) {
+    medHistory = histMatch[1].trim();
+  } else if (/(เบาหวาน|ความดัน|ไขมัน|หัวใจ)/.test(text)) {
+    const foundConds = [];
+    if (/เบาหวาน/.test(text)) foundConds.push("เบาหวาน");
+    if (/ความดัน/.test(text)) foundConds.push("ความดันโลหิตสูง");
+    if (/ไขมัน/.test(text)) foundConds.push("ไขมันในเลือดสูง");
+    if (/โรคหัวใจ/.test(text)) foundConds.push("โรคหัวใจ");
+    medHistory = foundConds.join(", ");
+  }
+
+  let allergies = "ไม่มี";
+  const allergyMatch = text.match(/แพ้ยา\s*([ก-๙a-zA-Z0-9\s]{2,25})/);
+  if (allergyMatch && allergyMatch[1] && !/ไม่แพ้ยา/.test(text)) {
+    allergies = allergyMatch[1].trim();
+  }
+
+  return {
+    firstName,
+    lastName,
+    age,
+    gender,
+    phone: "",
+    hn: "",
+    weight: "",
+    height: "",
+    bp: "",
+    pulse: "",
+    temp: symptoms.includes("fever") ? "38.2" : "36.8",
+    symptoms,
+    severity,
+    chiefComplaint: text,
+    medHistory,
+    benefitType,
+    allergies,
+  };
+}
+

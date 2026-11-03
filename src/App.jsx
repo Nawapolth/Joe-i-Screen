@@ -8,8 +8,11 @@ import {
   Eye,
   Lock,
   LogOut,
+  Mic,
+  MicOff,
   MousePointerClick,
   Plus,
+  Printer,
   RotateCcw,
   Search,
   Ticket,
@@ -18,7 +21,12 @@ import {
   VolumeX,
 } from "lucide-react";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { callScreeningAPI, formatPatientPrompt, generateClinicalTriage } from "./api";
+import {
+  callScreeningAPI,
+  formatPatientPrompt,
+  generateClinicalTriage,
+  parseVoicePatientTranscript,
+} from "./api";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://smfbyfrjiafaugninelq.supabase.co";
@@ -175,9 +183,23 @@ function extractBenefitType(rawMedHistory) {
   return match ? match[1].trim() : "";
 }
 
-function generateQueueNumber(severity, count) {
+function generateQueueNumber(severity, existingPatients = []) {
   const prefix = severity === "high" ? "ER" : severity === "mid" ? "A" : "B";
-  return `${prefix}-${String(count + 40).padStart(3, "0")}`;
+
+  // Find all existing queue numbers matching this prefix (e.g. "A-041", "A-042", "ER-041")
+  const numbers = existingPatients
+    .map((p) => {
+      const q = String(p.queueNumber || "").trim();
+      const match = q.match(new RegExp(`^${prefix}-(\\d+)`, "i"));
+      return match ? parseInt(match[1], 10) : null;
+    })
+    .filter((n) => Number.isInteger(n));
+
+  // Determine the highest number ever assigned to this prefix, or start at 40
+  const maxNumber = numbers.length > 0 ? Math.max(...numbers) : 40;
+  const nextNum = maxNumber + 1;
+
+  return `${prefix}-${String(nextNum).padStart(3, "0")}`;
 }
 
 // ─── SUPABASE HELPERS ─────────────────────────────────────────────────────────
@@ -207,12 +229,13 @@ function toRow(form, aiAnalysis) {
   };
 }
 
-function fromRow(row, index = 0) {
+function fromRow(row, index = 0, allRows = []) {
   const benefitType = extractBenefitType(row.med_history);
+  const queueNumber = generateQueueNumber(row.severity, allRows.slice(0, index));
   return {
     id:             row.id,
     dbId:           row.id,
-    queueNumber:    generateQueueNumber(row.severity, index + 1),
+    queueNumber,
     firstName:      row.first_name,
     lastName:       row.last_name,
     age:            row.age?.toString() || "",
@@ -310,7 +333,7 @@ const DEFAULT_A11Y = {
 
 function getPageSpeechSummary(pageName, ticket) {
   if (pageName === "home") {
-    return "ยินดีต้อนรับสู่ระบบคัดกรองผู้ป่วย โจ ไอเมด บริการประเมินอาการเบื้องต้นด้วยตนเอง หากมีอาการฉุกเฉินวิกฤต เช่น แน่นหน้าอกรุนแรง หรือหายใจไม่ออก โปรดกดปุ่ม เอสโอเอส เรียกพยาบาล ด้านบนทันที ท่านสามารถกดปุ่ม เริ่มทำแบบประเมินอาการ เพื่อรับหมายเลขคิว หรือค้นหาบัตรคิวเดิมได้ในหน้านี้";
+    return "ยินดีต้อนรับสู่ระบบคัดกรองผู้ป่วย โจ ไอเมด หากมีอาการฉุกเฉินวิกฤต เช่น แน่นหน้าอกรุนแรง หรือหมดสติเฉียบพลัน ให้กดปุ่มสีแดง เอสโอเอส เรียกพยาบาลด่วน ด้านบนค่ะ สำหรับผู้สูงอายุ สามารถกดปุ่มไมโครโฟนสีดำตรงกลางเพื่อพูดบอกอาการและรับบัตรคิวได้ทันที หรือท่านสามารถกดปุ่มสีขาวด้านล่างเพื่อเริ่มทำแบบประเมินอาการ 4 ขั้นตอนด้วยตนเองค่ะ";
   }
   if (pageName === "intake") {
     return "หน้าแบบประเมินอาการเบื้องต้น กรุณากรอกข้อมูลตามขั้นตอนทั้ง 4 ขั้นตอน ได้แก่ ข้อมูลผู้ป่วย ข้อมูลสุขภาพเบื้องต้น ระบุอาการ และสรุปผลเพื่อรับบัตรคิว";
@@ -335,6 +358,8 @@ export default function App() {
   const [showA11yMenu, setShowA11yMenu] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [currentAudio, setCurrentAudio] = useState(null);
+  const [activeHighlightSection, setActiveHighlightSection] = useState(null);
+  const [highlightTimer, setHighlightTimer] = useState(null);
   const [a11y, setA11y] = useState(() => {
     try {
       const saved = localStorage.getItem("joe_imed_a11y");
@@ -394,6 +419,11 @@ export default function App() {
   }, [a11y]);
 
   function stopSpeech() {
+    if (highlightTimer) {
+      clearTimeout(highlightTimer);
+      setHighlightTimer(null);
+    }
+    setActiveHighlightSection(null);
     if (currentAudio) {
       currentAudio.pause();
       currentAudio.currentTime = 0;
@@ -405,9 +435,47 @@ export default function App() {
     setIsSpeaking(false);
   }
 
-  async function speakThai(text) {
+  function startKaraokeIndicator() {
+    // Stage 1: Welcome (0 - 4s)
+    setActiveHighlightSection("header");
+
+    const t1 = setTimeout(() => {
+      // Stage 2: Red SOS Button (4s - 8s)
+      setActiveHighlightSection("sos");
+    }, 4000);
+
+    const t2 = setTimeout(() => {
+      // Stage 3: Giant Voice Mic button for elderly (8s - 14s)
+      setActiveHighlightSection("voice");
+    }, 8500);
+
+    const t3 = setTimeout(() => {
+      // Stage 4: 4-Step Intake button (14s - 19s)
+      setActiveHighlightSection("form");
+    }, 14500);
+
+    const t4 = setTimeout(() => {
+      setActiveHighlightSection(null);
+    }, 19500);
+
+    // Save timer reference to clear on stop
+    setHighlightTimer(t1);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      clearTimeout(t3);
+      clearTimeout(t4);
+    };
+  }
+
+  async function speakThai(text, withKaraoke = false) {
     if (!text || typeof text !== "string") return;
     stopSpeech();
+
+    let cleanupKaraoke = null;
+    if (withKaraoke) {
+      cleanupKaraoke = startKaraokeIndicator();
+    }
 
     // 1. Primary: Hospital Cloud TTS MP3 Audio (Google Cloud Neural2 / Fallback)
     try {
@@ -426,12 +494,16 @@ export default function App() {
         audio.onended = () => {
           setIsSpeaking(false);
           setCurrentAudio(null);
+          setActiveHighlightSection(null);
+          if (cleanupKaraoke) cleanupKaraoke();
           URL.revokeObjectURL(audioUrl);
         };
 
         audio.onerror = () => {
           setIsSpeaking(false);
           setCurrentAudio(null);
+          setActiveHighlightSection(null);
+          if (cleanupKaraoke) cleanupKaraoke();
           URL.revokeObjectURL(audioUrl);
         };
 
@@ -454,17 +526,29 @@ export default function App() {
         if (thaiVoice) utterance.voice = thaiVoice;
 
         utterance.onstart = () => setIsSpeaking(true);
-        utterance.onend = () => setIsSpeaking(false);
-        utterance.onerror = () => setIsSpeaking(false);
+        utterance.onend = () => {
+          setIsSpeaking(false);
+          setActiveHighlightSection(null);
+          if (cleanupKaraoke) cleanupKaraoke();
+        };
+        utterance.onerror = () => {
+          setIsSpeaking(false);
+          setActiveHighlightSection(null);
+          if (cleanupKaraoke) cleanupKaraoke();
+        };
 
         window.speechSynthesis.speak(utterance);
         return;
       } catch {
         setIsSpeaking(false);
+        setActiveHighlightSection(null);
+        if (cleanupKaraoke) cleanupKaraoke();
       }
     }
 
     setIsSpeaking(false);
+    setActiveHighlightSection(null);
+    if (cleanupKaraoke) cleanupKaraoke();
     showToast("ไม่สามารถเล่นเสียงอ่านได้ในขณะนี้", "error");
   }
 
@@ -503,7 +587,7 @@ export default function App() {
   }
 
   async function addPatient(form, aiAnalysis) {
-    const queueNumber = generateQueueNumber(form.severity, patients.length + 1);
+    const queueNumber = generateQueueNumber(form.severity, patients);
     const resolvedAI = aiAnalysis || generateClinicalTriage(form);
     const parsedAI = parseAIResult(resolvedAI) || generateClinicalTriage(form);
     const recommendedDept = form.department || parsedAI?.recommended_specialty || (form.severity === "high" ? "ห้องฉุกเฉิน (ER)" : "อายุรกรรม / เวชปฏิบัติทั่วไป");
@@ -762,8 +846,11 @@ export default function App() {
             setPage={navigatePage}
             activeTicket={activeTicket}
             onLookupTicket={handleLookupTicket}
+            onQuickVoiceSubmit={addPatient}
             isSpeaking={isSpeaking}
-            onSpeakPage={() => speakThai(getPageSpeechSummary("home", activeTicket))}
+            activeHighlightSection={activeHighlightSection}
+            onSpeak={speakThai}
+            onSpeakPage={() => speakThai(getPageSpeechSummary("home", activeTicket), true)}
             onStopSpeech={stopSpeech}
             onTriggerSOS={() => {
               const sosMsg = "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง";
@@ -1059,17 +1146,21 @@ function AccessibilityToolbar({
   );
 }
 
-// ─── PATIENT PORTAL: HOME PAGE ────────────────────────────────────────────────
+// ─── PATIENT PORTAL: HOME PAGE (DE-CLUTTERED + VOICE AI KIOSK) ────────────────
 function PatientHomePage({
   setPage,
   activeTicket,
   onLookupTicket,
+  onQuickVoiceSubmit,
   onTriggerSOS,
   isSpeaking,
+  activeHighlightSection,
+  onSpeak,
   onSpeakPage,
   onStopSpeech,
 }) {
   const [searchQuery, setSearchQuery] = useState("");
+  const [showVoiceModal, setShowVoiceModal] = useState(false);
 
   function handleSearchSubmit(e) {
     e.preventDefault();
@@ -1078,114 +1169,160 @@ function PatientHomePage({
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
-      {/* Consolidated Header with Action Callouts */}
-      <header className="flex flex-wrap items-center justify-between gap-4 pb-4 mb-4 border-b border-slate-200">
+      {/* Header with High-Prominence Read Aloud & SOS Buttons */}
+      <header className="flex flex-wrap items-center justify-between gap-4 pb-5 mb-4 border-b border-slate-200">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 leading-tight">
             ระบบคัดกรองผู้ป่วย JOE&apos;s i-MED
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-500 leading-normal">
-            บริการประเมินอาการเบื้องต้นด้วยตนเอง เพื่อแนะนำแผนกตรวจที่เหมาะสมและรับบัตรคิวอัตโนมัติ
+          <p className="mt-1 text-xs sm:text-sm text-slate-500">
+            พูดแจ้งอาการหรือกดทำแบบประเมิน เพื่อรับบัตรคิวเข้าพบแพทย์ทันที
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+        {/* Highlighted Important Buttons: Read Aloud & SOS Nurse */}
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
           {onSpeakPage && (
             <button
               type="button"
               onClick={isSpeaking ? onStopSpeech : onSpeakPage}
-              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs sm:text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors"
+              className={`inline-flex items-center gap-2 rounded-md border-2 px-4 py-2.5 text-xs sm:text-sm font-bold transition-all ${
+                isSpeaking
+                  ? "border-slate-900 bg-slate-900 text-white"
+                  : "border-slate-900 bg-amber-300 text-slate-950 hover:bg-amber-400"
+              }`}
             >
               {isSpeaking ? (
                 <>
-                  <VolumeX className="w-4 h-4 text-red-600" />
+                  <VolumeX className="w-4 h-4 text-white" />
                   <span>หยุดเสียงอ่าน</span>
                 </>
               ) : (
                 <>
-                  <Volume2 className="w-4 h-4 text-slate-700" />
-                  <span>ฟังคำแนะนำ</span>
+                  <Volume2 className="w-4 h-4 text-slate-950" />
+                  <span>🔊 ฟังเสียงแนะนำ (กดฟัง)</span>
                 </>
               )}
             </button>
           )}
 
-          <button
-            onClick={() => setPage("intake")}
-            className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span>+ เริ่มประเมินอาการ</span>
-          </button>
-
-          <button
-            onClick={onTriggerSOS}
-            className="inline-flex items-center gap-1.5 rounded-md border border-red-700 bg-red-600 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-red-700 transition-colors"
-          >
-            <span>🚨</span>
-            <span>SOS เรียกพยาบาล</span>
-          </button>
+          <div className="relative">
+            {activeHighlightSection === "sos" && (
+              <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-red-700 text-white text-[11px] font-bold px-2.5 py-1 rounded shadow-md whitespace-nowrap animate-bounce flex items-center gap-1 z-30">
+                <span>👇</span>
+                <span>กดปุ่มนี้เมื่อฉุกเฉินวิกฤต</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={onTriggerSOS}
+              className={`inline-flex items-center gap-2 rounded-md border-2 px-4 py-2.5 text-xs sm:text-sm font-bold text-white transition-all ${
+                activeHighlightSection === "sos"
+                  ? "border-red-950 bg-red-700 scale-105 ring-4 ring-red-400 ring-offset-2 animate-pulse"
+                  : "border-red-800 bg-red-600 hover:bg-red-700"
+              }`}
+            >
+              <span>🚨</span>
+              <span>SOS เรียกพยาบาลด่วน</span>
+            </button>
+          </div>
         </div>
       </header>
 
-      {/* Sleek, Single-Line Horizontal Emergency Alert Ribbon */}
+      {/* Sleek Single-Line Horizontal Emergency Alert Ribbon */}
       <div className="mb-5 flex items-center gap-2.5 rounded-md border border-red-200 bg-red-50/90 px-3.5 py-2 text-xs sm:text-sm text-red-900">
         <ExclamationTriangleIcon className="w-4 h-4 text-red-600 shrink-0" />
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 leading-normal">
           <strong className="font-semibold text-red-950">กรณีฉุกเฉินวิกฤต:</strong>
           <span className="text-red-800">
-            หากมีอาการแน่นหน้าอกรุนแรง หายใจไม่ออก ซึมลง หรือหมดสติเฉียบพลัน โปรดกดปุ่ม <strong className="font-semibold text-red-950">SOS เรียกพยาบาล</strong> ด้านบน หรือแจ้งพยาบาลประจำจุดคัดกรองทันที
+            แน่นหน้าอกรุนแรง หายใจไม่ออก หรือหน้ามืดหมดสติ โปรดกดปุ่ม{" "}
+            <strong className="font-semibold text-red-950">SOS เรียกพยาบาลด่วน</strong> ด้านบนทันที
           </span>
         </div>
       </div>
 
-      {/* Balanced Anti-Slop Two-Column Grid */}
+      {/* Clean, De-cluttered Two-Column Grid */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
-        {/* Left: Primary Self-Screening Container (md:col-span-7) */}
+        {/* Left: Primary Self-Screening & Voice-to-Queue Container (md:col-span-7) */}
         <div className="md:col-span-7 flex flex-col justify-between rounded-md border border-slate-200 bg-white p-5 sm:p-6">
           <div>
-            <div className="mb-3.5 inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
+            <div className="mb-3 inline-flex items-center gap-1.5 rounded border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-700">
               <ClipboardCheck className="w-3.5 h-3.5 text-slate-500" />
-              <span>บริการคัดกรองด้วยตนเอง</span>
+              <span>จุดออกบัตรคิวอัตโนมัติ</span>
             </div>
 
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 mb-1.5">
-              ลงทะเบียนและประเมินอาการเบื้องต้น
+            <h2 className="text-lg sm:text-xl font-bold text-slate-900 mb-1.5">
+              รับบัตรคิวและประเมินอาการเบื้องต้น
             </h2>
-            <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-4">
-              กรอกข้อมูลอาการป่วยและสัญญาณชีพเบื้องต้นเพื่อให้ระบบ AI ช่วยประเมินความเร่งด่วน แนะนำแผนกตรวจเฉพาะทาง และออกหมายเลขคิวเข้าพบแพทย์
+            <p className="text-xs sm:text-sm text-slate-600 mb-5">
+              เลือกวิธีที่สะดวกสำหรับท่าน — ผู้สูงอายุสามารถกดปุ่มไมโครโฟนแล้วพูดบอกอาการเพื่อรับบัตรคิวได้ทันที
             </p>
 
-            <div className="rounded-md border border-slate-200 bg-slate-50 p-3.5 mb-4">
-              <div className="text-xs font-semibold text-slate-900 mb-2">
-                ข้อมูลที่ใช้ในการประเมิน (ใช้เวลาประมาณ 2 นาที):
+            {/* Elderly Voice-to-Queue Highlight Box */}
+            <div
+              className={`relative rounded-md border-2 p-4 mb-4 transition-all ${
+                activeHighlightSection === "voice"
+                  ? "border-amber-500 bg-amber-50 ring-4 ring-amber-300 ring-offset-2 scale-[1.02]"
+                  : "border-slate-900 bg-slate-50"
+              }`}
+            >
+              {activeHighlightSection === "voice" && (
+                <div className="absolute -top-7 left-4 bg-amber-500 text-slate-950 text-[11px] font-bold px-2 py-0.5 rounded shadow flex items-center gap-1 animate-bounce z-20">
+                  <span>👇</span>
+                  <span>ผู้สูงอายุกดปุ่มนี้เพื่อพูดแจ้งอาการ</span>
+                </div>
+              )}
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div>
+                  <div className="text-xs font-bold uppercase tracking-wide text-slate-600">
+                    สำหรับผู้สูงอายุ / ไม่สะดวกพิมพ์
+                  </div>
+                  <div className="text-sm sm:text-base font-bold text-slate-900 mt-0.5">
+                    พูดแจ้งอาการด้วยเสียง (AI ออกบัตรคิวอัตโนมัติ)
+                  </div>
+                </div>
+                <Mic className="w-4 h-4 text-slate-900 shrink-0 mt-1" />
               </div>
-              <ul className="m-0 p-0 list-none flex flex-col gap-1.5 text-xs text-slate-600">
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-                  <span>ชื่อ-นามสกุล อายุ และสิทธิ์การรักษาพยาบาล</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-                  <span>อาการสำคัญที่นำมาโรงพยาบาลและระยะเวลาที่เป็น</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-slate-400 shrink-0" />
-                  <span>ประวัติโรคประจำตัวและประวัติการแพ้ยา (ถ้ามี)</span>
-                </li>
-              </ul>
+              <p className="text-xs text-slate-600 mb-3">
+                เพียงพูดชื่อ อายุ อาการป่วย และสิทธิการรักษา ระบบ AI จะกรอกข้อมูลและออกบัตรคิวให้ทันที
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowVoiceModal(true)}
+                className={`w-full inline-flex items-center justify-center gap-2 rounded-md py-3 px-4 text-xs sm:text-sm font-bold transition-all ${
+                  activeHighlightSection === "voice"
+                    ? "bg-amber-400 text-slate-950 border-2 border-slate-900 shadow-md"
+                    : "bg-slate-900 text-white hover:bg-slate-800"
+                }`}
+              >
+                <Mic className="w-4 h-4" />
+                <span>กดเพื่อพูดแจ้งอาการ (รับบัตรคิวทันที)</span>
+              </button>
             </div>
           </div>
 
-          <button
-            onClick={() => setPage("intake")}
-            className="w-full mt-4 rounded-md bg-slate-900 py-2.5 px-4 text-xs sm:text-sm font-semibold text-white hover:bg-slate-800 transition-colors text-center"
-          >
-            เริ่มทำแบบประเมินอาการ →
-          </button>
+          <div className="relative">
+            {activeHighlightSection === "form" && (
+              <div className="absolute -top-7 left-4 bg-slate-900 text-white text-[11px] font-bold px-2 py-0.5 rounded shadow flex items-center gap-1 animate-bounce z-20">
+                <span>👇</span>
+                <span>กดปุ่มนี้หากต้องการพิมพ์แบบประเมินเอง</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setPage("intake")}
+              className={`w-full rounded-md border py-2.5 px-4 text-xs sm:text-sm font-semibold transition-all text-center ${
+                activeHighlightSection === "form"
+                  ? "border-slate-900 bg-slate-100 ring-4 ring-slate-400 text-slate-900 font-bold"
+                  : "border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
+              }`}
+            >
+              + กรอกแบบประเมินอาการด้วยตนเอง (4 ขั้นตอน) →
+            </button>
+          </div>
         </div>
 
-        {/* Right: Search Stack + Repositioned Guidance Card (md:col-span-5) */}
+        {/* Right: Search Stack + Compact Guidance Card (md:col-span-5) */}
         <div className="md:col-span-5 flex flex-col justify-between gap-4">
           {activeTicket ? (
             <div className="rounded-md border border-slate-200 bg-white p-4 sm:p-5">
@@ -1226,8 +1363,8 @@ function PatientHomePage({
                 ตรวจสอบสถานะคิว / บัตรคิวเดิม
               </h2>
             </div>
-            <p className="text-xs text-slate-600 leading-relaxed mb-3">
-              ค้นหาบัตรคิวหรือผลการประเมินของท่านด้วยชื่อ เบอร์โทรศัพท์ หรือรหัสผู้ป่วย (HN)
+            <p className="text-xs text-slate-600 mb-3">
+              ค้นหาด้วยชื่อ เบอร์โทรศัพท์ หรือรหัสผู้ป่วย (HN)
             </p>
 
             <form onSubmit={handleSearchSubmit} className="flex flex-col gap-2">
@@ -1240,29 +1377,297 @@ function PatientHomePage({
               />
               <button
                 type="submit"
-                className="w-full rounded-md bg-slate-900 py-1.5 px-3 text-xs font-semibold text-white hover:bg-slate-800 transition-colors"
+                className="w-full rounded-md bg-slate-900 py-2 px-3 text-xs font-semibold text-white hover:bg-slate-800 transition-colors"
               >
                 ค้นหาบัตรคิว
               </button>
             </form>
           </div>
 
-          {/* Repositioned Guidance Card seated perfectly beneath search box card */}
+          {/* Compact Guidance Card */}
           <div className="rounded-md border border-slate-200 bg-slate-50 p-4 flex-1 flex flex-col justify-center">
             <div className="text-xs font-bold text-slate-900 mb-1">
               คำแนะนำสำหรับผู้รับบริการ
             </div>
             <p className="text-xs text-slate-600 leading-relaxed">
-              หลังประเมินอาการเสร็จสิ้น ท่านจะได้รับหมายเลขคิวพร้อมแผนกตรวจ สามารถนำหมายเลขคิวไปแสดงที่จุดซักประวัติของแผนกได้ทันที
+              นำสลิปบัตรคิวที่ได้ไปแสดงที่จุดซักประวัติของแผนกตรวจตามเวลาที่ระบุในบัตรคิว
             </p>
           </div>
+        </div>
+      </div>
+
+      {showVoiceModal && (
+        <VoiceIntakeModal
+          onClose={() => setShowVoiceModal(false)}
+          onSpeak={onSpeak}
+          onSubmitVoicePatient={async (parsedForm, aiResult) => {
+            setShowVoiceModal(false);
+            await onQuickVoiceSubmit(parsedForm, aiResult);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── ELDERLY VOICE-TO-QUEUE AI MODAL ──────────────────────────────────────────
+function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [recognitionInstance, setRecognitionInstance] = useState(null);
+
+  const samplePhrases = [
+    "ยายชื่อสมศรี ใจดี อายุ 72 ปี มีไข้ ไอ ปวดหัว มา 2 วัน ใช้สิทธิบัตรทองผู้สูงอายุ",
+    "ลุงชื่อสมหมาย รักไทย อายุ 68 ปี ปวดหลัง ปวดเข่า อ่อนเพลีย สิทธิเบิกตรงข้าราชการ",
+    "ชื่อกานดา สุขใจ อายุ 58 ปี แน่นหน้าอก หายใจลำบาก เวียนหัวมาก สิทธิประกันสังคม",
+  ];
+
+  function startListening() {
+    setErrorMsg("");
+    const SpeechRecognition =
+      typeof window !== "undefined" &&
+      (window.SpeechRecognition || window.webkitSpeechRecognition);
+
+    if (!SpeechRecognition) {
+      setErrorMsg(
+        "เบราว์เซอร์นี้ไม่รองรับการรับเสียงพูดโดยตรง ท่านสามารถกดปุ่มตัวอย่างประโยคด้านล่าง หรือพิมพ์ข้อความแทนได้"
+      );
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = "th-TH";
+      recognition.continuous = false;
+      recognition.interimResults = true;
+
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+
+      recognition.onresult = (event) => {
+        let currentText = "";
+        for (let i = 0; i < event.results.length; i += 1) {
+          currentText += event.results[i][0].transcript;
+        }
+        setTranscript(currentText);
+      };
+
+      recognition.onerror = () => {
+        setIsListening(false);
+        setErrorMsg("ไม่ได้ยินเสียงพูดชัดเจน กรุณาลองกดไมโครโฟนพูดอีกครั้ง หรือเลือกประโยคตัวอย่างด้านล่าง");
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      setRecognitionInstance(recognition);
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      setErrorMsg("ไม่สามารถเปิดไมโครโฟนได้ กรุณาตรวจสอบสิทธิ์ไมโครโฟนของเบราว์เซอร์");
+    }
+  }
+
+  function stopListening() {
+    if (recognitionInstance) {
+      try {
+        recognitionInstance.stop();
+      } catch {
+        // Ignore stop error
+      }
+    }
+    setIsListening(false);
+  }
+
+  async function handleProcessVoice() {
+    const clean = transcript.trim();
+    if (!clean) {
+      setErrorMsg("กรุณากดปุ่มไมโครโฟนเพื่อพูดแจ้งอาการ หรือเลือกประโยคตัวอย่างด้านล่าง");
+      return;
+    }
+
+    stopListening();
+    setProcessing(true);
+    setErrorMsg("");
+
+    const parsedForm = parseVoicePatientTranscript(clean);
+    const prompt = formatPatientPrompt(parsedForm);
+    const aiResult = await callAI(prompt, parsedForm);
+
+    if (onSpeak) {
+      onSpeak(
+        `ระบบรับข้อมูลของ ${parsedForm.firstName} อายุ ${parsedForm.age} ปี เรียบร้อยแล้ว กำลังออกบัตรคิวให้ท่านค่ะ`
+      );
+    }
+
+    await onSubmitVoicePatient(parsedForm, aiResult);
+    setProcessing(false);
+  }
+
+  const previewParsed = transcript.trim() ? parseVoicePatientTranscript(transcript) : null;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="ระบบรับแจ้งอาการด้วยเสียงสำหรับผู้สูงอายุ"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
+    >
+      <div className="w-full max-w-lg rounded-md border border-slate-300 bg-white p-5 sm:p-6 text-slate-900">
+        <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200">
+          <div className="flex items-center gap-2">
+            <Mic className="w-4 h-4 text-slate-900" />
+            <h3 className="text-base sm:text-lg font-bold text-slate-900">
+              พูดแจ้งอาการด้วยเสียง (AI ออกบัตรคิวอัตโนมัติ)
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              stopListening();
+              onClose();
+            }}
+            className="rounded px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="text-xs sm:text-sm text-slate-600 mb-4">
+          กดปุ่มไมโครโฟนด้านล่าง แล้วพูดบอก <strong>ชื่อ อายุ อาการที่เป็น และสิทธิการรักษา</strong>{" "}
+          (เช่น &ldquo;ยายชื่อสมศรี อายุ 72 ปี มีไข้ ไอ ปวดหัว สิทธิบัตรทอง&rdquo;)
+        </p>
+
+        {/* Big Microphone Action Button */}
+        <div className="flex flex-col items-center justify-center rounded-md border border-slate-200 bg-slate-50 p-5 mb-4 text-center">
+          <button
+            type="button"
+            onClick={isListening ? stopListening : startListening}
+            className={`inline-flex items-center justify-center gap-2.5 rounded-md px-6 py-3.5 text-sm sm:text-base font-bold text-white transition-colors ${
+              isListening
+                ? "bg-red-600 hover:bg-red-700 border-2 border-red-800"
+                : "bg-slate-900 hover:bg-slate-800"
+            }`}
+          >
+            {isListening ? (
+              <>
+                <MicOff className="w-4 h-4" />
+                <span>กำลังฟังเสียงของท่าน... (กดเพื่อหยุด)</span>
+              </>
+            ) : (
+              <>
+                <Mic className="w-4 h-4" />
+                <span>🎤 กดปุ่มนี้เพื่อเริ่มพูด</span>
+              </>
+            )}
+          </button>
+          <span className="mt-2 text-xs text-slate-500">
+            {isListening
+              ? "กรุณาพูดใกล้ไมโครโฟนด้วยน้ำเสียงปกติ..."
+              : "รองรับภาษาไทย — ระบบจะแปลงเสียงพูดเป็นข้อมูลผู้ป่วยโดยอัตโนมัติ"}
+          </span>
+        </div>
+
+        {/* Recognized Speech Box */}
+        <div className="mb-3">
+          <label className="block text-xs font-bold text-slate-700 mb-1">
+            ข้อความที่ระบบได้ยิน (สามารถแก้ไขหรือพิมพ์เพิ่มได้):
+          </label>
+          <textarea
+            rows={2}
+            value={transcript}
+            onChange={(e) => setTranscript(e.target.value)}
+            placeholder="ข้อความเสียงพูดของท่านจะปรากฏที่นี่..."
+            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs sm:text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:border-slate-900"
+          />
+        </div>
+
+        {/* Live AI Auto-Extracted Preview */}
+        {previewParsed && (
+          <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs">
+            <div className="font-bold text-slate-900 mb-1">
+              ข้อมูลที่ AI กรอกให้อัตโนมัติ:
+            </div>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-slate-700">
+              <div>
+                <strong>ชื่อผู้ป่วย:</strong> {previewParsed.firstName} {previewParsed.lastName}
+              </div>
+              <div>
+                <strong>อายุ / เพศ:</strong> {previewParsed.age} ปี ({previewParsed.gender})
+              </div>
+              <div>
+                <strong>สิทธิการรักษา:</strong> {previewParsed.benefitType}
+              </div>
+              <div>
+                <strong>ความเร่งด่วน:</strong>{" "}
+                {previewParsed.severity === "high"
+                  ? "ฉุกเฉิน / ความเสี่ยงสูง"
+                  : previewParsed.severity === "mid"
+                    ? "ปานกลาง"
+                    : "ทั่วไป"}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Quick Demo Phrases for Classroom / Professor Testing */}
+        <div className="mb-4">
+          <div className="text-[11px] font-semibold text-slate-500 mb-1.5">
+            หรือกดเลือกประโยคเสียงจำลองของผู้สูงอายุ (สำหรับทดสอบระบบ):
+          </div>
+          <div className="flex flex-col gap-1.5">
+            {samplePhrases.map((phrase, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => {
+                  setTranscript(phrase);
+                  setErrorMsg("");
+                }}
+                className="text-left rounded border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 hover:border-slate-400 hover:bg-slate-50 transition-colors"
+              >
+                &ldquo;{phrase}&rdquo;
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {errorMsg && (
+          <div className="mb-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-800">
+            {errorMsg}
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+          <button
+            type="button"
+            onClick={() => {
+              stopListening();
+              onClose();
+            }}
+            className="rounded-md border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            ยกเลิก
+          </button>
+          <button
+            type="button"
+            disabled={processing}
+            onClick={handleProcessVoice}
+            className="rounded-md bg-slate-900 px-4 py-2 text-xs sm:text-sm font-bold text-white hover:bg-slate-800 disabled:opacity-50"
+          >
+            {processing ? "กำลังออกบัตรคิว..." : "ยืนยันและออกบัตรคิวทันที →"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── PATIENT PORTAL: DIGITAL QUEUE TICKET PAGE ────────────────────────────────
+// ─── PATIENT PORTAL: REALISTIC 80MM THERMAL QUEUE SLIP PAGE ───────────────────
 function PatientTicketPage({
   ticket,
   onStartNew,
@@ -1342,20 +1747,39 @@ function PatientTicketPage({
 
   const aiResult = parseAIResult(ticket.aiAnalysis);
   const isHighRisk = ticket.severity === "high" || aiResult?.risk_level === "ฉุกเฉิน";
-  const symLabels = (ticket.symptoms || [])
-    .map((s) => SYMPTOMS.find((x) => x.id === s)?.label)
-    .filter(Boolean)
-    .join(", ");
+  const departmentName =
+    ticket.department || aiResult?.recommended_specialty || "อายุรกรรม";
+  const buildingLocation = isHighRisk
+    ? "อาคารอุบัติเหตุ-ฉุกเฉิน ชั้น 1"
+    : "อาคารผู้ป่วยนอก (OPD) ชั้น 2";
+
+  // Calculate realistic estimated doctor consultation time (+15 mins from ticket time, or immediate for ER)
+  const todayThaiDate = ticket.dateLabel || "วันนี้ (เฉพาะวันที่ออกบัตร)";
+  const timeMatch = String(ticket.time || "").match(/(\d{1,2}):(\d{2})/);
+  let computedEstTime = "ภายใน 15 นาที";
+  if (timeMatch) {
+    const totalMins = parseInt(timeMatch[1], 10) * 60 + parseInt(timeMatch[2], 10) + 15;
+    const estH = String(Math.floor(totalMins / 60) % 24).padStart(2, "0");
+    const estM = String(totalMins % 60).padStart(2, "0");
+    computedEstTime = `${estH}:${estM} น.`;
+  }
+  const estDoctorTime = isHighRisk ? "เข้าพบแพทย์ทันที (ฉุกเฉิน)" : computedEstTime;
+
+  const qnShort = String(ticket.id || "1827").slice(-4).padStart(4, "0");
+  const refShort = String(ticket.dbId || ticket.id || "199").slice(-3).padStart(3, "0");
 
   return (
-    <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+    <div className="print-wrapper max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      {/* High-Risk Alert Banner (Screen Only) */}
       {isHighRisk && (
-        <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-3.5 text-xs sm:text-sm text-red-900 flex-wrap">
+        <div className="no-print mb-4 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 p-3.5 text-xs sm:text-sm text-red-900 flex-wrap">
           <div className="flex items-center gap-2">
             <ExclamationTriangleIcon className="w-4 h-4 text-red-600 shrink-0" />
             <div>
               <span className="font-semibold text-red-950">เคสความเสี่ยงสูง: </span>
-              <span className="text-red-800">กรุณาติดต่อเคาน์เตอร์พยาบาลฉุกเฉินทันทีโดยไม่ต้องรอเรียกคิวปกติ</span>
+              <span className="text-red-800">
+                กรุณาติดต่อเคาน์เตอร์พยาบาลฉุกเฉินทันทีโดยไม่ต้องรอเรียกคิวปกติ
+              </span>
             </div>
           </div>
           <button
@@ -1368,248 +1792,185 @@ function PatientTicketPage({
         </div>
       )}
 
-      <div
-        style={{
-          backgroundColor: "#FFFFFF",
-          border: "1px solid #E2E8F0",
-          borderRadius: "6px",
-          overflow: "hidden",
-        }}
-      >
-        {/* Ticket Top Header */}
-        <div
-          style={{
-            backgroundColor: "#F8FAFC",
-            borderBottom: "1px solid #E2E8F0",
-            padding: "1.25rem 1.5rem",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            flexWrap: "wrap",
-            gap: "1rem",
-          }}
-        >
-          <div>
-            <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "#64748B", textTransform: "uppercase" }}>
-              บัตรคิวอิเล็กทรอนิกส์ · JOE&apos;s i-MED
-            </div>
-            <h1 style={{ fontSize: "1.35rem", fontWeight: 700, color: "#0F172A", marginTop: "2px" }}>
-              {ticket.firstName} {ticket.lastName}
-            </h1>
-            <div style={{ fontSize: "0.825rem", color: "#64748B", marginTop: "2px" }}>
-              รหัสอ้างอิง: {ticket.hn || ticket.patientId} · เวลาออกคิว: {ticket.time}
-            </div>
-          </div>
+      {/* Top Action Bar for Read Aloud & Print (Screen Only) */}
+      <div className="no-print mb-4 flex items-center justify-between gap-2 flex-wrap">
+        <div className="text-xs sm:text-sm font-bold text-slate-700">
+          ตัวอย่างสลิปบัตรคิว
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {onSpeakTicket && (
+            <button
+              type="button"
+              onClick={isSpeaking ? onStopSpeech : onSpeakTicket}
+              className="inline-flex items-center gap-1.5 rounded-md border-2 border-slate-900 bg-amber-300 px-3.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-colors"
+            >
+              {isSpeaking ? (
+                <>
+                  <VolumeX className="w-3.5 h-3.5 text-red-700" />
+                  <span>หยุดเสียงอ่าน</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-3.5 h-3.5 text-slate-950" />
+                  <span>🔊 อ่านบัตรคิวให้ฟัง</span>
+                </>
+              )}
+            </button>
+          )}
 
-          <div
-            style={{
-              backgroundColor: isHighRisk ? "#FEF2F2" : "#FFFFFF",
-              border: isHighRisk ? "1px solid #FECACA" : "1px solid #CBD5E1",
-              borderRadius: "6px",
-              padding: "0.75rem 1.25rem",
-              textAlign: "center",
-              minWidth: "140px",
-            }}
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 transition-colors"
           >
-            <div style={{ fontSize: "0.72rem", fontWeight: 700, color: isHighRisk ? "#991B1B" : "#64748B" }}>
-              หมายเลขคิวของคุณ
-            </div>
-            <div style={{ fontSize: "2rem", fontWeight: 800, color: isHighRisk ? "#DC2626" : "#0F172A", lineHeight: 1.1, marginTop: "2px" }}>
-              {ticket.queueNumber || "A-045"}
-            </div>
+            <Printer className="w-3.5 h-3.5" />
+            <span>พิมพ์สลิปบัตรคิว</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ─── AUTHENTIC 80MM HOSPITAL THERMAL SLIP (PRINTED & SCREEN) ─── */}
+      <div className="thermal-slip">
+        <div className="text-center border-b border-black pb-2 mb-2">
+          <div className="text-[11px] font-bold tracking-tight">
+            ***ใบสำคัญโปรดเก็บไว้จนกว่าจะตรวจเสร็จ***
+          </div>
+          <div className="text-base font-extrabold mt-0.5">
+            คลินิก{departmentName}
+          </div>
+          <div className="text-xs font-medium text-slate-800">
+            {buildingLocation}
           </div>
         </div>
 
-        {/* Ticket Body */}
-        <div style={{ padding: "1.5rem" }}>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-              gap: "1rem",
-              paddingBottom: "1.25rem",
-              marginBottom: "1.25rem",
-              borderBottom: "1px solid #E2E8F0",
-            }}
+        {/* Giant Queue Number */}
+        <div className="text-center py-2 border-b border-black mb-2">
+          <div className="text-xs font-bold">หมายเลขคิวรับบริการ / Queue No.</div>
+          <div className="text-4xl font-black tracking-wider my-1">
+            {ticket.queueNumber || "A-045"}
+          </div>
+          <div className="text-[11px] font-semibold">
+            ใช้ได้เฉพาะวันที่ {todayThaiDate}
+          </div>
+        </div>
+
+        {/* Essential Patient & Appointment Details */}
+        <div className="text-xs space-y-1 border-b border-black pb-2.5 mb-2.5">
+          <div className="flex justify-between">
+            <span className="font-bold">ชื่อ-สกุล:</span>
+            <span className="font-semibold text-right">
+              {ticket.firstName} {ticket.lastName}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-bold">อายุ / เพศ:</span>
+            <span>
+              {ticket.age || "—"} ปี / {ticket.gender || "ไม่ระบุ"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-bold">สิทธิการรักษา:</span>
+            <span className="font-bold">
+              {ticket.benefitType || "แจ้งที่จุดลงทะเบียน"}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-bold">แผนกตรวจ:</span>
+            <span className="font-semibold">{departmentName}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="font-bold">เวลาพบแพทย์โดยประมาณ:</span>
+            <span className="font-extrabold">{estDoctorTime}</span>
+          </div>
+        </div>
+
+        {/* QN, Reference Number & Simulated Hospital QR Code */}
+        <div className="flex items-center justify-between gap-2 border-b border-black pb-2.5 mb-2">
+          <div className="text-xs space-y-0.5">
+            <div className="text-base font-black">QN: {qnShort}</div>
+            <div>เลขอ้างอิง: {refShort}</div>
+            <div className="text-[11px]">
+              HN: {ticket.hn || ticket.patientId || "OPD-NEW"}
+            </div>
+            <div className="text-[11px]">เวลารับคิว: {ticket.time}</div>
+          </div>
+
+          {/* Crisp SVG QR Code for slip authenticity */}
+          <svg
+            viewBox="0 0 36 36"
+            className="w-16 h-16 shrink-0 border border-black p-1 bg-white"
+            aria-label="QR Code สำหรับตรวจสอบคิว"
           >
-            <div>
-              <div style={{ fontSize: "0.75rem", color: "#64748B", fontWeight: 600 }}>แผนกที่แนะนำให้เข้ารับบริการ</div>
-              <div style={{ fontSize: "1.05rem", fontWeight: 700, color: "#0F172A", marginTop: "4px" }}>
-                แผนก{ticket.department || aiResult?.recommended_specialty || "อายุรกรรม / แพทย์ทั่วไป"}
-              </div>
+            <path
+              fill="#000"
+              d="M2 2h10v10H2V2zm2 2v6h6V4H4zm2 2h2v2H6V6zm18-4h10v10H24V2zm2 2v6h6V4h-6zm2 2h2v2h-2V6zM2 24h10v10H2V24zm2 2v6h6v-6H4zm2 2h2v2H6v-2zm10-24h2v4h-2V4zm4 0h2v2h-2V4zm-4 6h4v2h-4v-2zm6 2h2v4h-2v-4zm-8 4h2v4h-2v-4zm4 2h4v4h-4v-4zm-12 2h4v2H4v-2zm6 0h4v2h-4v-2zm14-4h4v2h-4v-2zm6 2h2v4h-2v-4zm-8 4h2v6h-2v-6zm4 2h6v2h-6v-2zm-10 4h4v4h-4v-4zm6 4h4v2h-4v-2zm6-2h4v4h-4v-4z"
+            />
+          </svg>
+        </div>
+
+        {/* Footer Instruction matching Pathum Thani Hospital Slip */}
+        <div className="text-center">
+          <div className="text-sm font-extrabold">พบแพทย์</div>
+          <div className="text-[11px] mt-0.5">
+            ไม่ต้องติดต่อฝ่ายการเงิน โปรดรอฟังเรียกคิวหน้าห้องตรวจ
+          </div>
+        </div>
+      </div>
+
+      {/* ─── SCREEN-ONLY AUXILIARY SECTIONS (HIDDEN ON PRINT) ─── */}
+      <div className="no-print mt-6">
+        {/* Smiley Satisfaction Rating Box (Hospital Kiosk Feedback Terminal) */}
+        <div className="mb-5 rounded-md border border-slate-200 bg-white p-4 text-center">
+          <div className="text-xs sm:text-sm font-bold text-slate-900 mb-1">
+            ประเมินความพึงพอใจการใช้บริการตู้คัดกรองอัตโนมัติ
+          </div>
+          <p className="text-xs text-slate-500 mb-3">
+            ความคิดเห็นของท่านช่วยพัฒนาการบริการของโรงพยาบาลให้ดียิ่งขึ้น
+          </p>
+
+          {ratingSubmitted ? (
+            <div className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs sm:text-sm font-semibold text-emerald-800">
+              <span>✓</span>
+              <span>ขอบพระคุณสำหรับข้อเสนอแนะในการรับบริการ (คะแนน: {rating}/5)</span>
             </div>
-            <div>
-              <div style={{ fontSize: "0.75rem", color: "#64748B", fontWeight: 600 }}>ระดับความเร่งด่วน</div>
-              <div style={{ marginTop: "4px" }}>
-                <span
-                  style={{
-                    display: "inline-block",
-                    backgroundColor: isHighRisk ? "#FEF2F2" : "#F1F5F9",
-                    color: isHighRisk ? "#991B1B" : "#0F172A",
-                    border: isHighRisk ? "1px solid #FECACA" : "1px solid #CBD5E1",
-                    borderRadius: "4px",
-                    padding: "3px 8px",
-                    fontSize: "0.8rem",
-                    fontWeight: 700,
-                  }}
+          ) : (
+            <div className="grid grid-cols-5 gap-1.5 sm:gap-2.5 max-w-md mx-auto">
+              {satisfactionOptions.map((opt) => (
+                <button
+                  key={opt.score}
+                  type="button"
+                  onClick={() => handleRate(opt.score)}
+                  className={`flex flex-col items-center justify-center p-2 sm:p-2.5 rounded-md border border-slate-200 bg-slate-50 transition-all transform active:scale-95 ${opt.color}`}
                 >
-                  {isHighRisk ? "เคสความเสี่ยงสูง (เร่งด่วน)" : ticket.severity === "mid" ? "ความเสี่ยงปานกลาง" : "ทั่วไป (ตามลำดับคิว)"}
-                </span>
-              </div>
-            </div>
-            <div>
-              <div style={{ fontSize: "0.75rem", color: "#64748B", fontWeight: 600 }}>สิทธิ์การรักษาพยาบาล</div>
-              <div style={{ fontSize: "0.95rem", fontWeight: 600, color: "#0F172A", marginTop: "4px" }}>
-                {ticket.benefitType || "แจ้งที่จุดลงทะเบียน"}
-              </div>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: "1.25rem" }}>
-            <div style={{ fontSize: "0.8rem", fontWeight: 700, color: "#0F172A", marginBottom: "0.35rem" }}>
-              อาการที่แจ้งคัดกรอง
-            </div>
-            <div style={{ fontSize: "0.9rem", color: "#0F172A" }}>
-              {symLabels || "—"} {ticket.chiefComplaint ? `(${ticket.chiefComplaint})` : ""}
-            </div>
-          </div>
-
-          {aiResult && aiResult.mode === "result_mode" && (
-            <div
-              style={{
-                backgroundColor: "#F8FAFC",
-                border: "1px solid #E2E8F0",
-                borderRadius: "6px",
-                padding: "1rem 1.25rem",
-                marginBottom: "1.25rem",
-              }}
-            >
-              <div style={{ fontSize: "0.85rem", fontWeight: 700, color: "#0F172A", marginBottom: "0.4rem" }}>
-                คำแนะนำเบื้องต้นจากระบบวิเคราะห์อาการ (AI)
-              </div>
-              <p style={{ fontSize: "0.875rem", color: "#0F172A", lineHeight: 1.6, marginBottom: "0.65rem" }}>
-                {aiResult.summary}
-              </p>
-              {Array.isArray(aiResult.next_steps) && aiResult.next_steps.length > 0 && (
-                <ul style={{ margin: 0, paddingLeft: "1.1rem", fontSize: "0.85rem", color: "#0F172A", lineHeight: 1.6 }}>
-                  {aiResult.next_steps.map((s, idx) => (
-                    <li key={idx}>{s}</li>
-                  ))}
-                </ul>
-              )}
+                  <span className="text-2xl sm:text-3xl leading-none mb-1 select-none">
+                    {opt.emoji}
+                  </span>
+                  <span className="text-[10px] sm:text-xs font-semibold text-slate-700 leading-tight">
+                    {opt.label}
+                  </span>
+                </button>
+              ))}
             </div>
           )}
+        </div>
 
-          {/* Pre-consultation patient checklist */}
-          <div
-            style={{
-              backgroundColor: "#FFFFFF",
-              border: "1px solid #E2E8F0",
-              borderRadius: "6px",
-              padding: "1rem 1.25rem",
-              marginBottom: "1.25rem",
-            }}
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-4 py-2 text-xs sm:text-sm font-semibold text-slate-900 hover:bg-slate-50 transition-colors"
           >
-            <div style={{ fontSize: "0.825rem", fontWeight: 700, color: "#0F172A", marginBottom: "0.4rem" }}>
-              ขั้นตอนการเข้ารับบริการสำหรับผู้ป่วย
-            </div>
-            <ol style={{ margin: 0, paddingLeft: "1.1rem", fontSize: "0.85rem", color: "#64748B", lineHeight: 1.7 }}>
-              <li>เตรียมบัตรประจำตัวประชาชน และเอกสารสิทธิ์การรักษาให้พร้อม</li>
-              <li>เดินทางไปยังจุดซักประวัติของ <strong style={{ color: "#0F172A" }}>แผนก{ticket.department || "อายุรกรรม"}</strong></li>
-              <li>หากมีอาการผิดปกติรุนแรงขึ้นระหว่างรอคิว กรุณาแจ้งพยาบาลประจำจุดคัดกรองทันที</li>
-            </ol>
-          </div>
+            <Printer className="w-4 h-4" />
+            <span>พิมพ์สลิปบัตรคิว</span>
+          </button>
 
-          {/* Smiley Satisfaction Rating Box (Hospital Kiosk Feedback Terminal) */}
-          <div className="mb-6 rounded-md border border-slate-200 bg-slate-50 p-4 text-center">
-            <div className="text-xs sm:text-sm font-bold text-slate-900 mb-1">
-              ประเมินความพึงพอใจการใช้บริการตู้คัดกรองอัตโนมัติ
-            </div>
-            <p className="text-xs text-slate-500 mb-3">
-              ความคิดเห็นของท่านช่วยพัฒนาการบริการของโรงพยาบาลให้ดียิ่งขึ้น
-            </p>
-
-            {ratingSubmitted ? (
-              <div className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs sm:text-sm font-semibold text-emerald-800">
-                <span>✓</span>
-                <span>ขอบพระคุณสำหรับข้อเสนอแนะในการรับบริการ (คะแนน: {rating}/5)</span>
-              </div>
-            ) : (
-              <div className="grid grid-cols-5 gap-1.5 sm:gap-2.5 max-w-md mx-auto">
-                {satisfactionOptions.map((opt) => (
-                  <button
-                    key={opt.score}
-                    type="button"
-                    onClick={() => handleRate(opt.score)}
-                    className={`flex flex-col items-center justify-center p-2 sm:p-2.5 rounded-md border border-slate-200 bg-white transition-all transform active:scale-95 ${opt.color}`}
-                  >
-                    <span className="text-2xl sm:text-3xl leading-none mb-1 select-none">
-                      {opt.emoji}
-                    </span>
-                    <span className="text-[10px] sm:text-xs font-semibold text-slate-700 leading-tight">
-                      {opt.label}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-              <button
-                onClick={() => window.print()}
-                style={{
-                  backgroundColor: "#FFFFFF",
-                  color: "#0F172A",
-                  border: "1px solid #CBD5E1",
-                  borderRadius: "6px",
-                  padding: "0.6rem 1rem",
-                  fontSize: "0.85rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                }}
-              >
-                พิมพ์บัตรคิว / บันทึกหน้าจอ
-              </button>
-
-              {onSpeakTicket && (
-                <button
-                  type="button"
-                  onClick={isSpeaking ? onStopSpeech : onSpeakTicket}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-50 px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-900 hover:bg-slate-100 transition-colors"
-                >
-                  {isSpeaking ? (
-                    <>
-                      <VolumeX className="w-4 h-4 text-red-600" />
-                      <span>หยุดเสียงอ่าน</span>
-                    </>
-                  ) : (
-                    <>
-                      <Volume2 className="w-4 h-4 text-slate-800" />
-                      <span>อ่านข้อมูลบัตรคิวให้ฟัง</span>
-                    </>
-                  )}
-                </button>
-              )}
-            </div>
-
-            <button
-              onClick={onStartNew}
-              style={{
-                backgroundColor: "#0F172A",
-                color: "#FFFFFF",
-                border: "1px solid #0F172A",
-                borderRadius: "6px",
-                padding: "0.6rem 1.25rem",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              เสร็จสิ้น (ปิดหน้าข้อมูลเพื่อความเป็นส่วนตัว)
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={onStartNew}
+            className="rounded-md bg-slate-900 px-5 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
+          >
+            เสร็จสิ้น (กลับสู่หน้าหลัก)
+          </button>
         </div>
       </div>
     </div>
