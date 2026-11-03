@@ -334,6 +334,7 @@ export default function App() {
   const [showStaffLoginModal, setShowStaffLoginModal] = useState(false);
   const [showA11yMenu, setShowA11yMenu] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [currentAudio, setCurrentAudio] = useState(null);
   const [a11y, setA11y] = useState(() => {
     try {
       const saved = localStorage.getItem("joe_imed_a11y");
@@ -393,31 +394,78 @@ export default function App() {
   }, [a11y]);
 
   function stopSpeech() {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      setCurrentAudio(null);
+    }
     if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
   }
 
-  function speakThai(text) {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      showToast("เบราว์เซอร์ของท่านไม่รองรับระบบอ่านออกเสียง", "error");
-      return;
+  async function speakThai(text) {
+    if (!text || typeof text !== "string") return;
+    stopSpeech();
+
+    // 1. Primary: Hospital Cloud TTS MP3 Audio (Google Cloud Neural2 / Fallback)
+    try {
+      setIsSpeaking(true);
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+
+      if (res.ok) {
+        const blob = await res.blob();
+        const audioUrl = URL.createObjectURL(blob);
+        const audio = new Audio(audioUrl);
+
+        audio.onended = () => {
+          setIsSpeaking(false);
+          setCurrentAudio(null);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        audio.onerror = () => {
+          setIsSpeaking(false);
+          setCurrentAudio(null);
+          URL.revokeObjectURL(audioUrl);
+        };
+
+        setCurrentAudio(audio);
+        await audio.play();
+        return;
+      }
+    } catch (e) {
+      console.warn("Cloud TTS playback failed, attempting browser fallback:", e);
     }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "th-TH";
-    utterance.rate = 0.95;
-    const voices = window.speechSynthesis.getVoices();
-    const thaiVoice = voices.find((v) => v.lang && v.lang.toLowerCase().includes("th"));
-    if (thaiVoice) {
-      utterance.voice = thaiVoice;
+
+    // 2. Secondary: Browser SpeechSynthesis fallback
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = "th-TH";
+        utterance.rate = 0.95;
+        const voices = window.speechSynthesis.getVoices();
+        const thaiVoice = voices.find((v) => v.lang && v.lang.toLowerCase().includes("th"));
+        if (thaiVoice) utterance.voice = thaiVoice;
+
+        utterance.onstart = () => setIsSpeaking(true);
+        utterance.onend = () => setIsSpeaking(false);
+        utterance.onerror = () => setIsSpeaking(false);
+
+        window.speechSynthesis.speak(utterance);
+        return;
+      } catch {
+        setIsSpeaking(false);
+      }
     }
-    utterance.onstart = () => setIsSpeaking(true);
-    utterance.onend = () => setIsSpeaking(false);
-    utterance.onerror = () => setIsSpeaking(false);
-    setIsSpeaking(true);
-    window.speechSynthesis.speak(utterance);
+
+    setIsSpeaking(false);
+    showToast("ไม่สามารถเล่นเสียงอ่านได้ในขณะนี้", "error");
   }
 
   function navigatePage(nextPage, ticketOverride = activeTicket) {

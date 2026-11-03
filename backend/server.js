@@ -1,4 +1,4 @@
-/* global process */
+/* global process, Buffer */
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
@@ -25,6 +25,56 @@ app.get("/health", (_req, res) => {
     status: "healthy",
     service: "joe-imed-ai-proxy",
   });
+});
+
+app.post("/api/tts", async (req, res) => {
+  const text = (req.body?.text || "").trim();
+  if (!text) {
+    return res.status(400).json({ error: "Missing text." });
+  }
+
+  const googleKey = process.env.GOOGLE_TTS_API_KEY || process.env.GOOGLE_CLOUD_API_KEY;
+
+  try {
+    let audioBuffer;
+    if (googleKey) {
+      const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleKey}`;
+      const gRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          input: { text },
+          voice: { languageCode: "th-TH", name: "th-TH-Neural2-C", ssmlGender: "FEMALE" },
+          audioConfig: { audioEncoding: "MP3", speakingRate: 0.95 },
+        }),
+      });
+      if (gRes.ok) {
+        const data = await gRes.json();
+        if (data.audioContent) {
+          audioBuffer = Buffer.from(data.audioContent, "base64");
+        }
+      }
+    }
+
+    if (!audioBuffer) {
+      const encoded = encodeURIComponent(text.slice(0, 200));
+      const fallbackUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=th&client=tw-ob`;
+      const fRes = await fetch(fallbackUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+          Referer: "https://translate.google.com/",
+        },
+      });
+      const ab = await fRes.arrayBuffer();
+      audioBuffer = Buffer.from(ab);
+    }
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+    return res.send(audioBuffer);
+  } catch (error) {
+    return res.status(500).json({ error: "TTS failed", details: error.message });
+  }
 });
 
 function buildSystemPrompt() {
