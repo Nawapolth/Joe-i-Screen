@@ -1,14 +1,21 @@
 import { useState, useEffect } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
+  Accessibility,
   Activity,
   ClipboardCheck,
   Database,
+  Eye,
   Lock,
   LogOut,
+  MousePointerClick,
   Plus,
+  RotateCcw,
   Search,
   Ticket,
+  Type,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { callScreeningAPI, formatPatientPrompt, generateClinicalTriage } from "./api";
@@ -294,6 +301,30 @@ function parseAIResult(raw) {
   };
 }
 
+const DEFAULT_A11Y = {
+  fontScale: "normal", // "normal" | "lg" | "xl"
+  highContrast: false,
+  largeTargets: false,
+  autoRead: false,
+};
+
+function getPageSpeechSummary(pageName, ticket) {
+  if (pageName === "home") {
+    return "ยินดีต้อนรับสู่ระบบคัดกรองผู้ป่วย โจ ไอเมด บริการประเมินอาการเบื้องต้นด้วยตนเอง หากมีอาการฉุกเฉินวิกฤต เช่น แน่นหน้าอกรุนแรง หรือหายใจไม่ออก โปรดกดปุ่ม เอสโอเอส เรียกพยาบาล ด้านบนทันที ท่านสามารถกดปุ่ม เริ่มทำแบบประเมินอาการ เพื่อรับหมายเลขคิว หรือค้นหาบัตรคิวเดิมได้ในหน้านี้";
+  }
+  if (pageName === "intake") {
+    return "หน้าแบบประเมินอาการเบื้องต้น กรุณากรอกข้อมูลตามขั้นตอนทั้ง 4 ขั้นตอน ได้แก่ ข้อมูลผู้ป่วย ข้อมูลสุขภาพเบื้องต้น ระบุอาการ และสรุปผลเพื่อรับบัตรคิว";
+  }
+  if (pageName === "ticket") {
+    if (!ticket) {
+      return "หน้าบัตรคิวของฉัน ขณะนี้ยังไม่มีบัตรคิวที่เปิดดู ท่านสามารถค้นหาบัตรคิวด้วยชื่อ เบอร์โทรศัพท์ หรือรหัสผู้ป่วย หรือกดเริ่มทำแบบประเมินอาการใหม่";
+    }
+    const urgencyText = ticket.severity === "high" ? "เคสความเสี่ยงสูง เร่งด่วน กรุณาติดต่อเคาน์เตอร์พยาบาลฉุกเฉินทันที" : ticket.severity === "mid" ? "ความเสี่ยงปานกลาง" : "ทั่วไป ตามลำดับคิว";
+    return `บัตรคิวอิเล็กทรอนิกส์ของ คุณ ${ticket.firstName} ${ticket.lastName} หมายเลขคิวของคุณคือ ${ticket.queueNumber} แผนกที่แนะนำคือ แผนก${ticket.department || "อายุรกรรม"} ระดับความเร่งด่วน ${urgencyText}`;
+  }
+  return "ระบบจัดการคิวและคัดกรองผู้ป่วย โจ ไอเมด สำหรับเจ้าหน้าที่";
+}
+
 // ─── ROOT APP ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [page, setPage] = useState("home");
@@ -301,6 +332,16 @@ export default function App() {
   const [activeTicket, setActiveTicket] = useState(null);
   const [isStaffAuthenticated, setIsStaffAuthenticated] = useState(false);
   const [showStaffLoginModal, setShowStaffLoginModal] = useState(false);
+  const [showA11yMenu, setShowA11yMenu] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [a11y, setA11y] = useState(() => {
+    try {
+      const saved = localStorage.getItem("joe_imed_a11y");
+      return saved ? { ...DEFAULT_A11Y, ...JSON.parse(saved) } : DEFAULT_A11Y;
+    } catch {
+      return DEFAULT_A11Y;
+    }
+  });
 
   const [appointments, setAppointments] = useState([
     { id: "APT-1024", patientName: "นางสาวกานดา รัตนชัย", time: "08:30", department: "ศัลยกรรม", benefitType: "ประกันสังคม", status: "นัดหมายแล้ว", note: "นัดตรวจติดตามหลังผ่าตัด" },
@@ -336,6 +377,55 @@ export default function App() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: "instant" });
   }, [page]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove("a11y-font-lg", "a11y-font-xl", "a11y-high-contrast", "a11y-large-targets");
+    if (a11y.fontScale === "lg") root.classList.add("a11y-font-lg");
+    if (a11y.fontScale === "xl") root.classList.add("a11y-font-xl");
+    if (a11y.highContrast) root.classList.add("a11y-high-contrast");
+    if (a11y.largeTargets) root.classList.add("a11y-large-targets");
+    try {
+      localStorage.setItem("joe_imed_a11y", JSON.stringify(a11y));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [a11y]);
+
+  function stopSpeech() {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsSpeaking(false);
+  }
+
+  function speakThai(text) {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      showToast("เบราว์เซอร์ของท่านไม่รองรับระบบอ่านออกเสียง", "error");
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "th-TH";
+    utterance.rate = 0.95;
+    const voices = window.speechSynthesis.getVoices();
+    const thaiVoice = voices.find((v) => v.lang && v.lang.toLowerCase().includes("th"));
+    if (thaiVoice) {
+      utterance.voice = thaiVoice;
+    }
+    utterance.onstart = () => setIsSpeaking(true);
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+    setIsSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  }
+
+  function navigatePage(nextPage, ticketOverride = activeTicket) {
+    setPage(nextPage);
+    if (a11y.autoRead) {
+      speakThai(getPageSpeechSummary(nextPage, ticketOverride));
+    }
+  }
 
   async function fetchPatients() {
     setDbStatus("loading");
@@ -385,7 +475,7 @@ export default function App() {
       setPatients((prev) => [fallbackPatient, ...prev]);
       setActiveTicket(fallbackPatient);
       showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-      setPage("ticket");
+      navigatePage("ticket", fallbackPatient);
       return;
     }
 
@@ -400,7 +490,7 @@ export default function App() {
         setPatients((prev) => [fallbackPatient, ...prev]);
         setActiveTicket(fallbackPatient);
         showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-        setPage("ticket");
+        navigatePage("ticket", fallbackPatient);
         return;
       }
 
@@ -411,12 +501,12 @@ export default function App() {
       });
       setActiveTicket(savedRecord);
       showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-      setPage("ticket");
+      navigatePage("ticket", savedRecord);
     } catch {
       setPatients((prev) => [fallbackPatient, ...prev]);
       setActiveTicket(fallbackPatient);
       showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-      setPage("ticket");
+      navigatePage("ticket", fallbackPatient);
     }
   }
 
@@ -436,7 +526,7 @@ export default function App() {
 
   function handleInspectPatient(patient) {
     setSelectedPatient(patient);
-    setPage("staff-patients");
+    navigatePage("staff-patients");
   }
 
   function handleLookupTicket(query) {
@@ -455,7 +545,7 @@ export default function App() {
 
     if (found) {
       setActiveTicket(found);
-      setPage("ticket");
+      navigatePage("ticket", found);
     } else {
       showToast("ไม่พบข้อมูลคิวของผู้ป่วยที่ระบุ", "error");
     }
@@ -463,7 +553,7 @@ export default function App() {
 
   function handleStaffAccessClick() {
     if (isStaffAuthenticated) {
-      setPage("staff-dashboard");
+      navigatePage("staff-dashboard");
     } else {
       setShowStaffLoginModal(true);
     }
@@ -472,18 +562,27 @@ export default function App() {
   function handleStaffLogout() {
     setIsStaffAuthenticated(false);
     setSelectedPatient(null);
-    setPage("home");
+    navigatePage("home");
     showToast("ออกจากระบบเจ้าหน้าที่แล้ว");
   }
 
   const isStaffView = page.startsWith("staff-");
+  const hasActiveA11y =
+    a11y.fontScale !== "normal" || a11y.highContrast || a11y.largeTargets || a11y.autoRead;
 
   return (
     <div style={{ backgroundColor: "#F8FAFC", minHeight: "100vh", color: "#0F172A", paddingBottom: "3rem" }}>
-      <nav className="sticky top-0 z-50 flex items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 py-2.5">
+      <a href="#main-content" className="skip-link">
+        ข้ามไปยังเนื้อหาหลัก (Skip to main content)
+      </a>
+
+      <nav
+        aria-label="แถบนำทางหลัก"
+        className="sticky top-0 z-50 flex items-center justify-between border-b border-slate-200 bg-white px-4 sm:px-6 py-2.5"
+      >
         <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
           <button
-            onClick={() => setPage(isStaffView ? "staff-dashboard" : "home")}
+            onClick={() => navigatePage(isStaffView ? "staff-dashboard" : "home")}
             className="flex items-center gap-2.5 text-left bg-transparent border-0 cursor-pointer p-0"
           >
             <div className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-900">
@@ -512,7 +611,8 @@ export default function App() {
               ].map(([k, v]) => (
                 <button
                   key={k}
-                  onClick={() => setPage(k)}
+                  onClick={() => navigatePage(k)}
+                  aria-current={page === k ? "page" : undefined}
                   className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-md transition-colors ${
                     page === k
                       ? "bg-slate-900 text-white"
@@ -524,6 +624,22 @@ export default function App() {
               ))}
 
               <div className="mx-1.5 h-4 w-px bg-slate-200 hidden sm:block" />
+
+              <AccessibilityToolbar
+                a11y={a11y}
+                setA11y={setA11y}
+                isOpen={showA11yMenu}
+                setIsOpen={setShowA11yMenu}
+                hasActiveA11y={hasActiveA11y}
+                isSpeaking={isSpeaking}
+                onSpeakCurrentPage={() => speakThai(getPageSpeechSummary(page, activeTicket))}
+                onStopSpeech={stopSpeech}
+                onReset={() => {
+                  setA11y(DEFAULT_A11Y);
+                  stopSpeech();
+                  showToast("รีเซ็ตการตั้งค่าการเข้าถึงเป็นค่าเริ่มต้นแล้ว");
+                }}
+              />
 
               <button
                 onClick={handleStaffAccessClick}
@@ -542,7 +658,8 @@ export default function App() {
               ].map(([k, v]) => (
                 <button
                   key={k}
-                  onClick={() => setPage(k)}
+                  onClick={() => navigatePage(k)}
+                  aria-current={page === k ? "page" : undefined}
                   className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-md transition-colors ${
                     page === k
                       ? "bg-slate-900 text-white"
@@ -555,8 +672,24 @@ export default function App() {
 
               <div className="mx-1.5 h-4 w-px bg-slate-200 hidden sm:block" />
 
+              <AccessibilityToolbar
+                a11y={a11y}
+                setA11y={setA11y}
+                isOpen={showA11yMenu}
+                setIsOpen={setShowA11yMenu}
+                hasActiveA11y={hasActiveA11y}
+                isSpeaking={isSpeaking}
+                onSpeakCurrentPage={() => speakThai(getPageSpeechSummary(page, activeTicket))}
+                onStopSpeech={stopSpeech}
+                onReset={() => {
+                  setA11y(DEFAULT_A11Y);
+                  stopSpeech();
+                  showToast("รีเซ็ตการตั้งค่าการเข้าถึงเป็นค่าเริ่มต้นแล้ว");
+                }}
+              />
+
               <button
-                onClick={() => setPage("home")}
+                onClick={() => navigatePage("home")}
                 className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 hover:text-slate-900 transition-colors"
               >
                 สลับไปหน้าผู้ป่วย
@@ -574,34 +707,55 @@ export default function App() {
         </div>
       </nav>
 
-      <main key={page} className="page-transition">
+      <main id="main-content" key={page} className="page-transition">
         {/* ─── PATIENT PORTAL VIEWS ─── */}
         {page === "home" && (
           <PatientHomePage
-            setPage={setPage}
+            setPage={navigatePage}
             activeTicket={activeTicket}
             onLookupTicket={handleLookupTicket}
-            onTriggerSOS={() => showToast("ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง", "error")}
+            isSpeaking={isSpeaking}
+            onSpeakPage={() => speakThai(getPageSpeechSummary("home", activeTicket))}
+            onStopSpeech={stopSpeech}
+            onTriggerSOS={() => {
+              const sosMsg = "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง";
+              showToast(sosMsg, "error");
+              if (a11y.autoRead) speakThai(sosMsg);
+            }}
           />
         )}
-        {page === "intake" && <IntakePage onSubmit={addPatient} />}
+        {page === "intake" && (
+          <IntakePage
+            onSubmit={addPatient}
+            isSpeaking={isSpeaking}
+            onSpeak={speakThai}
+            onStopSpeech={stopSpeech}
+          />
+        )}
         {page === "ticket" && (
           <PatientTicketPage
             ticket={activeTicket}
+            isSpeaking={isSpeaking}
+            onSpeakTicket={() => speakThai(getPageSpeechSummary("ticket", activeTicket))}
+            onStopSpeech={stopSpeech}
             onStartNew={() => {
               setActiveTicket(null);
-              setPage("home");
+              navigatePage("home", null);
             }}
-            onGoToIntake={() => setPage("intake")}
+            onGoToIntake={() => navigatePage("intake")}
             onLookupTicket={handleLookupTicket}
-            onTriggerSOS={() => showToast("ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง", "error")}
+            onTriggerSOS={() => {
+              const sosMsg = "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง";
+              showToast(sosMsg, "error");
+              if (a11y.autoRead) speakThai(sosMsg);
+            }}
           />
         )}
 
         {/* ─── PROTECTED STAFF VIEWS ─── */}
         {page === "staff-dashboard" && isStaffAuthenticated && (
           <StaffDashboardHome
-            setPage={setPage}
+            setPage={navigatePage}
             patients={patients}
             dbStatus={dbStatus}
             onInspectPatient={handleInspectPatient}
@@ -634,7 +788,7 @@ export default function App() {
           onSuccess={() => {
             setIsStaffAuthenticated(true);
             setShowStaffLoginModal(false);
-            setPage("staff-dashboard");
+            navigatePage("staff-dashboard");
             showToast("เข้าสู่ระบบสำหรับบุคลากรเรียบร้อยแล้ว");
           }}
         />
@@ -642,6 +796,8 @@ export default function App() {
 
       {toast && (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             position: "fixed",
             bottom: "20px",
@@ -663,8 +819,208 @@ export default function App() {
   );
 }
 
+// ─── CLINICAL ACCESSIBILITY TOOLBAR (WCAG / HOSPITAL KIOSK) ───────────────────
+function AccessibilityToolbar({
+  a11y,
+  setA11y,
+  isOpen,
+  setIsOpen,
+  hasActiveA11y,
+  isSpeaking,
+  onSpeakCurrentPage,
+  onStopSpeech,
+  onReset,
+}) {
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        aria-expanded={isOpen}
+        aria-label="ตั้งค่าตัวช่วยการเข้าถึงสำหรับผู้พิการและผู้สูงอายุ"
+        className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+          hasActiveA11y || isOpen
+            ? "border-slate-900 bg-slate-900 text-white"
+            : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-900"
+        }`}
+      >
+        <Accessibility className="w-3.5 h-3.5" />
+        <span>ตัวช่วยการเข้าถึง</span>
+        {hasActiveA11y && (
+          <span className="ml-0.5 rounded bg-white/20 px-1 py-0.2 text-[10px] font-bold">
+            เปิดอยู่
+          </span>
+        )}
+      </button>
+
+      {isOpen && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setIsOpen(false)}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-label="เมนูตัวช่วยการเข้าถึง (Accessibility)"
+            className="absolute right-0 mt-2 w-80 sm:w-88 rounded-md border border-slate-300 bg-white p-4 z-50 text-slate-900"
+          >
+            <div className="flex items-center justify-between pb-2.5 mb-3 border-b border-slate-200">
+              <div className="flex items-center gap-1.5">
+                <Accessibility className="w-4 h-4 text-slate-900" />
+                <span className="text-xs sm:text-sm font-bold text-slate-900">
+                  ตัวช่วยการเข้าถึง (ผู้สูงอายุ / ผู้พิการ)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsOpen(false)}
+                aria-label="ปิดเมนูตัวช่วยการเข้าถึง"
+                className="rounded px-1.5 py-0.5 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 1. Font Size Scaling */}
+            <div className="mb-3.5">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 mb-1.5">
+                <Type className="w-3.5 h-3.5 text-slate-600" />
+                <span>ขนาดตัวอักษร (สำหรับผู้สายตาเลือนราง)</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  ["normal", "ก ปกติ"],
+                  ["lg", "ก+ ใหญ่"],
+                  ["xl", "ก++ ใหญ่พิเศษ"],
+                ].map(([val, label]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => setA11y((prev) => ({ ...prev, fontScale: val }))}
+                    className={`rounded-md border px-2 py-1.5 text-xs font-semibold transition-colors ${
+                      a11y.fontScale === val
+                        ? "border-slate-900 bg-slate-900 text-white"
+                        : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 2. High Contrast & Large Touch Targets */}
+            <div className="space-y-2 mb-3.5">
+              <button
+                type="button"
+                onClick={() => setA11y((prev) => ({ ...prev, highContrast: !prev.highContrast }))}
+                aria-pressed={a11y.highContrast}
+                className={`w-full flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs font-semibold transition-colors ${
+                  a11y.highContrast
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Eye className="w-3.5 h-3.5 shrink-0" />
+                  <span>โหมดความคมชัดสูง (High Contrast)</span>
+                </span>
+                <span className="text-[11px] font-bold">
+                  {a11y.highContrast ? "เปิด" : "ปิด"}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setA11y((prev) => ({ ...prev, largeTargets: !prev.largeTargets }))}
+                aria-pressed={a11y.largeTargets}
+                className={`w-full flex items-center justify-between rounded-md border px-3 py-2 text-left text-xs font-semibold transition-colors ${
+                  a11y.largeTargets
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : "border-slate-200 bg-slate-50 text-slate-800 hover:bg-slate-100"
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <MousePointerClick className="w-3.5 h-3.5 shrink-0" />
+                  <span>ปุ่มกดขนาดใหญ่ (ลดการกดพลาด/มือสั่น)</span>
+                </span>
+                <span className="text-[11px] font-bold">
+                  {a11y.largeTargets ? "เปิด" : "ปิด"}
+                </span>
+              </button>
+            </div>
+
+            {/* 3. Thai Text-to-Speech (Audio Assist) */}
+            <div className="pt-3 border-t border-slate-200 mb-3">
+              <div className="text-xs font-semibold text-slate-800 mb-2">
+                ระบบเสียงอ่านภาษาไทย (สำหรับผู้มีปัญหาทางการมองเห็น)
+              </div>
+              <div className="flex gap-1.5 mb-2">
+                <button
+                  type="button"
+                  onClick={isSpeaking ? onStopSpeech : onSpeakCurrentPage}
+                  className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-xs font-semibold transition-colors ${
+                    isSpeaking
+                      ? "border border-red-700 bg-red-600 text-white hover:bg-red-700"
+                      : "bg-slate-900 text-white hover:bg-slate-800"
+                  }`}
+                >
+                  {isSpeaking ? (
+                    <>
+                      <VolumeX className="w-3.5 h-3.5" />
+                      <span>หยุดเสียงอ่าน</span>
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="w-3.5 h-3.5" />
+                      <span>อ่านข้อมูลหน้านี้ให้ฟัง</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setA11y((prev) => ({ ...prev, autoRead: !prev.autoRead }))}
+                aria-pressed={a11y.autoRead}
+                className={`w-full flex items-center justify-between rounded-md border px-3 py-1.5 text-left text-xs font-medium transition-colors ${
+                  a11y.autoRead
+                    ? "border-slate-900 bg-slate-100 text-slate-900 font-semibold"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                <span>อ่านออกเสียงอัตโนมัติเมื่อเปลี่ยนหน้า/รับคิว</span>
+                <span className="font-bold">{a11y.autoRead ? "เปิด" : "ปิด"}</span>
+              </button>
+            </div>
+
+            {/* Reset Button */}
+            <button
+              type="button"
+              onClick={onReset}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-md border border-slate-200 bg-white py-1.5 px-3 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>รีเซ็ตการตั้งค่าทั้งหมดเป็นค่าเริ่มต้น</span>
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── PATIENT PORTAL: HOME PAGE ────────────────────────────────────────────────
-function PatientHomePage({ setPage, activeTicket, onLookupTicket, onTriggerSOS }) {
+function PatientHomePage({
+  setPage,
+  activeTicket,
+  onLookupTicket,
+  onTriggerSOS,
+  isSpeaking,
+  onSpeakPage,
+  onStopSpeech,
+}) {
   const [searchQuery, setSearchQuery] = useState("");
 
   function handleSearchSubmit(e) {
@@ -685,7 +1041,27 @@ function PatientHomePage({ setPage, activeTicket, onLookupTicket, onTriggerSOS }
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {onSpeakPage && (
+            <button
+              type="button"
+              onClick={isSpeaking ? onStopSpeech : onSpeakPage}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs sm:text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors"
+            >
+              {isSpeaking ? (
+                <>
+                  <VolumeX className="w-4 h-4 text-red-600" />
+                  <span>หยุดเสียงอ่าน</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-4 h-4 text-slate-700" />
+                  <span>ฟังคำแนะนำ</span>
+                </>
+              )}
+            </button>
+          )}
+
           <button
             onClick={() => setPage("intake")}
             className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
@@ -839,7 +1215,16 @@ function PatientHomePage({ setPage, activeTicket, onLookupTicket, onTriggerSOS }
 }
 
 // ─── PATIENT PORTAL: DIGITAL QUEUE TICKET PAGE ────────────────────────────────
-function PatientTicketPage({ ticket, onStartNew, onGoToIntake, onLookupTicket, onTriggerSOS }) {
+function PatientTicketPage({
+  ticket,
+  onStartNew,
+  onGoToIntake,
+  onLookupTicket,
+  onTriggerSOS,
+  isSpeaking,
+  onSpeakTicket,
+  onStopSpeech,
+}) {
   const [lookupInput, setLookupInput] = useState("");
 
   if (!ticket) {
@@ -1062,21 +1447,43 @@ function PatientTicketPage({ ticket, onStartNew, onGoToIntake, onLookupTicket, o
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-            <button
-              onClick={() => window.print()}
-              style={{
-                backgroundColor: "#FFFFFF",
-                color: "#0F172A",
-                border: "1px solid #CBD5E1",
-                borderRadius: "6px",
-                padding: "0.6rem 1rem",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              พิมพ์บัตรคิว / บันทึกหน้าจอ
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button
+                onClick={() => window.print()}
+                style={{
+                  backgroundColor: "#FFFFFF",
+                  color: "#0F172A",
+                  border: "1px solid #CBD5E1",
+                  borderRadius: "6px",
+                  padding: "0.6rem 1rem",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                พิมพ์บัตรคิว / บันทึกหน้าจอ
+              </button>
+
+              {onSpeakTicket && (
+                <button
+                  type="button"
+                  onClick={isSpeaking ? onStopSpeech : onSpeakTicket}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-slate-50 px-3.5 py-2 text-xs sm:text-sm font-semibold text-slate-900 hover:bg-slate-100 transition-colors"
+                >
+                  {isSpeaking ? (
+                    <>
+                      <VolumeX className="w-4 h-4 text-red-600" />
+                      <span>หยุดเสียงอ่าน</span>
+                    </>
+                  ) : (
+                    <>
+                      <Volume2 className="w-4 h-4 text-slate-800" />
+                      <span>อ่านข้อมูลบัตรคิวให้ฟัง</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
 
             <button
               onClick={onStartNew}
@@ -1927,7 +2334,7 @@ function AppointmentsPage({ appointments, onUpdateAppointment }) {
 }
 
 // ─── INTAKE PAGE (PATIENT SELF-SCREENING) ─────────────────────────────────────
-function IntakePage({ onSubmit }) {
+function IntakePage({ onSubmit, isSpeaking, onSpeak, onStopSpeech }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({ ...BLANK_FORM });
   const [aiResult, setAiResult] = useState(null);
@@ -1969,11 +2376,40 @@ function IntakePage({ onSubmit }) {
   ];
 
   const STEPS = ["ข้อมูลผู้ป่วย", "ข้อมูลสุขภาพเบื้องต้น", "ระบุอาการ", "สรุปผลและรับบัตรคิว"];
+  const STEP_SPEECH = [
+    "ขั้นตอนที่ 1 ข้อมูลผู้ป่วย กรุณากรอก ชื่อ นามสกุล อายุ เพศ และเลือกสิทธิ์การรักษาพยาบาล จากนั้นกดปุ่ม ถัดไป",
+    "ขั้นตอนที่ 2 ข้อมูลสุขภาพเบื้องต้น กรอกความดันโลหิต ชีพจร อุณหภูมิ และน้ำหนักส่วนสูง หากไม่ได้วัดไว้ สามารถกดปุ่ม ถัดไป เพื่อข้ามขั้นตอนนี้ได้ทันที",
+    "ขั้นตอนที่ 3 ระบุอาการ กรุณากดเลือกอาการที่ท่านเป็น เลือกระดับความรุนแรงของอาการ และอธิบายอาการสำคัญเพิ่มเติม",
+    "ขั้นตอนที่ 4 สรุปผลและรับบัตรคิว ท่านสามารถกดปุ่ม วิเคราะห์อาการด้วย เอไอ เพื่อดูแผนกที่แนะนำ หรือกดปุ่ม ยืนยันข้อมูลและรับบัตรคิว ได้ทันที",
+  ];
   const progress = ((step + 1) / STEPS.length) * 100;
 
   return (
     <div className="page" style={{ maxWidth: "860px" }}>
-      <div className="section-title">แบบประเมินอาการเบื้องต้นสำหรับผู้ป่วย</div>
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+        <div className="section-title" style={{ marginBottom: 0 }}>
+          แบบประเมินอาการเบื้องต้นสำหรับผู้ป่วย
+        </div>
+        {onSpeak && (
+          <button
+            type="button"
+            onClick={isSpeaking ? onStopSpeech : () => onSpeak(STEP_SPEECH[step])}
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors"
+          >
+            {isSpeaking ? (
+              <>
+                <VolumeX className="w-3.5 h-3.5 text-red-600" />
+                <span>หยุดเสียงอ่าน</span>
+              </>
+            ) : (
+              <>
+                <Volume2 className="w-3.5 h-3.5 text-slate-700" />
+                <span>ฟังคำแนะนำขั้นตอนที่ {step + 1}</span>
+              </>
+            )}
+          </button>
+        )}
+      </div>
       <div className="intake-card">
         <div className="intake-steps">
           {STEPS.map((s, i) => (

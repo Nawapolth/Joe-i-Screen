@@ -644,3 +644,76 @@ code {
   }
 }
 
+/* ─── CLINICAL ACCESSIBILITY (A11Y) MODES ──────────────────────────────────── */
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: 1rem;
+  z-index: 9999;
+  background: #0f172a;
+  color: #ffffff;
+  padding: 0.6rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-link:focus {
+  top: 0.75rem;
+  outline: 2px solid #dc2626;
+  outline-offset: 2px;
+}
+
+html.a11y-font-lg {
+  font-size: 17px !important;
+}
+
+html.a11y-font-xl {
+  font-size: 19px !important;
+}
+
+html.a11y-high-contrast {
+  --text: #000000;
+  --text-muted: #1e293b;
+  --border: #0f172a;
+  --border-strong: #000000;
+}
+
+html.a11y-high-contrast body {
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+
+html.a11y-high-contrast .intake-card,
+html.a11y-high-contrast .vital-card,
+html.a11y-high-contrast .symptom-btn,
+html.a11y-high-contrast .sev-btn,
+html.a11y-high-contrast input,
+html.a11y-high-contrast select,
+html.a11y-high-contrast textarea,
+html.a11y-high-contrast .border-slate-200,
+html.a11y-high-contrast .border-slate-300 {
+  border-color: #0f172a !important;
+}
+
+html.a11y-high-contrast .text-slate-500,
+html.a11y-high-contrast .text-slate-600 {
+  color: #0f172a !important;
+}
+
+html.a11y-high-contrast *:focus-visible {
+  outline: 2px solid #0f172a !important;
+  outline-offset: 2px !important;
+}
+
+html.a11y-large-targets button,
+html.a11y-large-targets input,
+html.a11y-large-targets select,
+html.a11y-large-targets .symptom-btn,
+html.a11y-large-targets .sev-btn {
+  min-height: 44px;
+}
+
+
