@@ -1214,8 +1214,8 @@ function PatientHomePage({
           {onSpeakPage && (
             <div className="relative">
               {(activeHighlightSection === "header" || activeHighlightSection === "home-header") && (
-                <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-                  <span className="text-lg">👇</span>
+                <div className="absolute top-full mt-2.5 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+                  <span className="text-lg">☝️</span>
                   <span>กดปุ่มนี้เพื่อฟังเสียงอ่านแนะนำ</span>
                 </div>
               )}
@@ -1247,8 +1247,8 @@ function PatientHomePage({
 
           <div className="relative">
             {(activeHighlightSection === "sos" || activeHighlightSection === "home-sos") && (
-              <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-red-700 text-white border-2 border-white text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-                <span className="text-lg">👇</span>
+              <div className="absolute top-full mt-2.5 left-1/2 -translate-x-1/2 bg-red-700 text-white border-2 border-white text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+                <span className="text-lg">☝️</span>
                 <span>กดปุ่มนี้เมื่อฉุกเฉินวิกฤต</span>
               </div>
             )}
@@ -1864,8 +1864,8 @@ function PatientTicketPage({
 
           <div className="relative">
             {activeHighlightSection === "ticket-print" && (
-              <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-                <span className="text-lg">👇</span>
+              <div className="absolute top-full mt-2.5 right-0 sm:left-1/2 sm:-translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+                <span className="text-lg">☝️</span>
                 <span>กดปุ่มนี้เพื่อพิมพ์สลิปบัตรคิว</span>
               </div>
             )}
