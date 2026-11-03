@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   Accessibility,
@@ -359,7 +359,7 @@ export default function App() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [currentAudio, setCurrentAudio] = useState(null);
   const [activeHighlightSection, setActiveHighlightSection] = useState(null);
-  const [highlightTimer, setHighlightTimer] = useState(null);
+  const activeTimersRef = useRef([]);
   const [a11y, setA11y] = useState(() => {
     try {
       const saved = localStorage.getItem("joe_imed_a11y");
@@ -419,9 +419,9 @@ export default function App() {
   }, [a11y]);
 
   function stopSpeech() {
-    if (highlightTimer) {
-      clearTimeout(highlightTimer);
-      setHighlightTimer(null);
+    if (activeTimersRef.current && activeTimersRef.current.length > 0) {
+      activeTimersRef.current.forEach((t) => clearTimeout(t));
+      activeTimersRef.current = [];
     }
     setActiveHighlightSection(null);
     if (currentAudio) {
@@ -435,36 +435,55 @@ export default function App() {
     setIsSpeaking(false);
   }
 
-  function startKaraokeIndicator() {
-    // Stage 1: Welcome (0 - 4s)
-    setActiveHighlightSection("header");
+  function startKaraokeIndicator(mode = "home") {
+    // Clear any previous active timers
+    if (activeTimersRef.current && activeTimersRef.current.length > 0) {
+      activeTimersRef.current.forEach((t) => clearTimeout(t));
+      activeTimersRef.current = [];
+    }
 
-    const t1 = setTimeout(() => {
-      // Stage 2: Red SOS Button (4s - 8s)
-      setActiveHighlightSection("sos");
-    }, 4000);
+    const addTimer = (fn, delay) => {
+      const id = setTimeout(fn, delay);
+      activeTimersRef.current.push(id);
+    };
 
-    const t2 = setTimeout(() => {
-      // Stage 3: Giant Voice Mic button for elderly (8s - 14s)
-      setActiveHighlightSection("voice");
-    }, 8500);
+    if (mode === "home" || mode === true) {
+      // PatientHomePage Sequence:
+      // Stage 1: Welcome Header / Read Aloud (0 - 3.5s)
+      setActiveHighlightSection("home-header");
+      // Stage 2: Red SOS Emergency Button (3.5s - 8s)
+      addTimer(() => setActiveHighlightSection("home-sos"), 3500);
+      // Stage 3: Elderly Voice-to-Queue Mic Button (8s - 14s)
+      addTimer(() => setActiveHighlightSection("home-voice"), 8000);
+      // Stage 4: 4-Step Intake Button (14s - 19.5s)
+      addTimer(() => setActiveHighlightSection("home-form"), 14000);
+      addTimer(() => setActiveHighlightSection(null), 19500);
+    } else if (mode === "ticket") {
+      // PatientTicketPage Sequence:
+      // Stage 1: Giant Queue Number (0 - 4s)
+      setActiveHighlightSection("ticket-queue");
+      // Stage 2: Department & Estimated Doctor Time (4s - 8.5s)
+      addTimer(() => setActiveHighlightSection("ticket-dept"), 4000);
+      // Stage 3: Print Slip Button (8.5s - 13s)
+      addTimer(() => setActiveHighlightSection("ticket-print"), 8500);
+      // Stage 4: Smiley Satisfaction Rating Box (13s - 18s)
+      addTimer(() => setActiveHighlightSection("ticket-rating"), 13000);
+      addTimer(() => setActiveHighlightSection(null), 18000);
+    } else if (typeof mode === "string" && mode.startsWith("intake")) {
+      // IntakePage Sequence:
+      const isStep3 = mode === "intake-3";
+      // Stage 1: Active Form Fields / Inputs (0 - 5.5s)
+      setActiveHighlightSection("intake-fields");
+      // Stage 2: Next button or Submit button (5.5s - 11s)
+      addTimer(() => setActiveHighlightSection(isStep3 ? "intake-submit" : "intake-next"), 5500);
+      addTimer(() => setActiveHighlightSection(null), 11000);
+    }
 
-    const t3 = setTimeout(() => {
-      // Stage 4: 4-Step Intake button (14s - 19s)
-      setActiveHighlightSection("form");
-    }, 14500);
-
-    const t4 = setTimeout(() => {
-      setActiveHighlightSection(null);
-    }, 19500);
-
-    // Save timer reference to clear on stop
-    setHighlightTimer(t1);
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(t3);
-      clearTimeout(t4);
+      if (activeTimersRef.current) {
+        activeTimersRef.current.forEach((t) => clearTimeout(t));
+        activeTimersRef.current = [];
+      }
     };
   }
 
@@ -474,7 +493,8 @@ export default function App() {
 
     let cleanupKaraoke = null;
     if (withKaraoke) {
-      cleanupKaraoke = startKaraokeIndicator();
+      const mode = typeof withKaraoke === "string" ? withKaraoke : "home";
+      cleanupKaraoke = startKaraokeIndicator(mode);
     }
 
     // 1. Primary: Hospital Cloud TTS MP3 Audio (Google Cloud Neural2 / Fallback)
@@ -555,7 +575,8 @@ export default function App() {
   function navigatePage(nextPage, ticketOverride = activeTicket) {
     setPage(nextPage);
     if (a11y.autoRead) {
-      speakThai(getPageSpeechSummary(nextPage, ticketOverride));
+      const mode = nextPage === "home" ? "home" : nextPage === "ticket" ? "ticket" : nextPage === "intake" ? "intake-0" : false;
+      speakThai(getPageSpeechSummary(nextPage, ticketOverride), mode);
     }
   }
 
@@ -764,7 +785,10 @@ export default function App() {
                 setIsOpen={setShowA11yMenu}
                 hasActiveA11y={hasActiveA11y}
                 isSpeaking={isSpeaking}
-                onSpeakCurrentPage={() => speakThai(getPageSpeechSummary(page, activeTicket))}
+                onSpeakCurrentPage={() => {
+                  const mode = page === "home" ? "home" : page === "ticket" ? "ticket" : page === "intake" ? "intake-0" : false;
+                  speakThai(getPageSpeechSummary(page, activeTicket), mode);
+                }}
                 onStopSpeech={stopSpeech}
                 onReset={() => {
                   setA11y(DEFAULT_A11Y);
@@ -811,7 +835,10 @@ export default function App() {
                 setIsOpen={setShowA11yMenu}
                 hasActiveA11y={hasActiveA11y}
                 isSpeaking={isSpeaking}
-                onSpeakCurrentPage={() => speakThai(getPageSpeechSummary(page, activeTicket))}
+                onSpeakCurrentPage={() => {
+                  const mode = page === "home" ? "home" : page === "ticket" ? "ticket" : page === "intake" ? "intake-0" : false;
+                  speakThai(getPageSpeechSummary(page, activeTicket), mode);
+                }}
                 onStopSpeech={stopSpeech}
                 onReset={() => {
                   setA11y(DEFAULT_A11Y);
@@ -863,7 +890,8 @@ export default function App() {
           <IntakePage
             onSubmit={addPatient}
             isSpeaking={isSpeaking}
-            onSpeak={speakThai}
+            activeHighlightSection={activeHighlightSection}
+            onSpeak={(text, flow) => speakThai(text, flow || "intake-0")}
             onStopSpeech={stopSpeech}
           />
         )}
@@ -871,7 +899,8 @@ export default function App() {
           <PatientTicketPage
             ticket={activeTicket}
             isSpeaking={isSpeaking}
-            onSpeakTicket={() => speakThai(getPageSpeechSummary("ticket", activeTicket))}
+            activeHighlightSection={activeHighlightSection}
+            onSpeakTicket={() => speakThai(getPageSpeechSummary("ticket", activeTicket), "ticket")}
             onStopSpeech={stopSpeech}
             onStartNew={() => {
               setActiveTicket(null);
@@ -1183,46 +1212,56 @@ function PatientHomePage({
         {/* Highlighted Important Buttons: Read Aloud & SOS Nurse */}
         <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
           {onSpeakPage && (
-            <button
-              type="button"
-              onClick={isSpeaking ? onStopSpeech : onSpeakPage}
-              className={`inline-flex items-center gap-2 rounded-md border-2 px-4 py-2.5 text-xs sm:text-sm font-bold transition-all ${
-                isSpeaking
-                  ? "border-slate-900 bg-slate-900 text-white"
-                  : "border-slate-900 bg-amber-300 text-slate-950 hover:bg-amber-400"
-              }`}
-            >
-              {isSpeaking ? (
-                <>
-                  <VolumeX className="w-4 h-4 text-white" />
-                  <span>หยุดเสียงอ่าน</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 className="w-4 h-4 text-slate-950" />
-                  <span>🔊 ฟังเสียงแนะนำ (กดฟัง)</span>
-                </>
+            <div className="relative">
+              {(activeHighlightSection === "header" || activeHighlightSection === "home-header") && (
+                <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+                  <span className="text-lg">👇</span>
+                  <span>กดปุ่มนี้เพื่อฟังเสียงอ่านแนะนำ</span>
+                </div>
               )}
-            </button>
+              <button
+                type="button"
+                onClick={isSpeaking ? onStopSpeech : onSpeakPage}
+                className={`inline-flex items-center gap-2.5 rounded-lg border-2 px-5 py-3 text-sm sm:text-base font-extrabold shadow-sm transition-all ${
+                  isSpeaking
+                    ? "border-slate-900 bg-slate-900 text-white"
+                    : (activeHighlightSection === "header" || activeHighlightSection === "home-header")
+                    ? "border-slate-950 bg-amber-400 text-slate-950 ring-4 ring-amber-300 ring-offset-2 scale-105"
+                    : "border-slate-900 bg-amber-300 text-slate-950 hover:bg-amber-400"
+                }`}
+              >
+                {isSpeaking ? (
+                  <>
+                    <VolumeX className="w-7 h-7 text-white shrink-0" />
+                    <span>หยุดเสียงอ่าน</span>
+                  </>
+                ) : (
+                  <>
+                    <Volume2 className="w-7 h-7 text-slate-950 shrink-0" />
+                    <span>🔊 ฟังเสียงแนะนำ (กดฟัง)</span>
+                  </>
+                )}
+              </button>
+            </div>
           )}
 
           <div className="relative">
-            {activeHighlightSection === "sos" && (
-              <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-red-700 text-white text-[11px] font-bold px-2.5 py-1 rounded shadow-md whitespace-nowrap animate-bounce flex items-center gap-1 z-30">
-                <span>👇</span>
+            {(activeHighlightSection === "sos" || activeHighlightSection === "home-sos") && (
+              <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-red-700 text-white border-2 border-white text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+                <span className="text-lg">👇</span>
                 <span>กดปุ่มนี้เมื่อฉุกเฉินวิกฤต</span>
               </div>
             )}
             <button
               type="button"
               onClick={onTriggerSOS}
-              className={`inline-flex items-center gap-2 rounded-md border-2 px-4 py-2.5 text-xs sm:text-sm font-bold text-white transition-all ${
-                activeHighlightSection === "sos"
+              className={`inline-flex items-center gap-2.5 rounded-lg border-2 px-5 py-3 text-sm sm:text-base font-extrabold text-white transition-all shadow-sm ${
+                (activeHighlightSection === "sos" || activeHighlightSection === "home-sos")
                   ? "border-red-950 bg-red-700 scale-105 ring-4 ring-red-400 ring-offset-2 animate-pulse"
                   : "border-red-800 bg-red-600 hover:bg-red-700"
               }`}
             >
-              <span>🚨</span>
+              <span className="text-lg">🚨</span>
               <span>SOS เรียกพยาบาลด่วน</span>
             </button>
           </div>
@@ -1260,16 +1299,16 @@ function PatientHomePage({
 
             {/* Elderly Voice-to-Queue Highlight Box */}
             <div
-              className={`relative rounded-md border-2 p-4 mb-4 transition-all ${
-                activeHighlightSection === "voice"
-                  ? "border-amber-500 bg-amber-50 ring-4 ring-amber-300 ring-offset-2 scale-[1.02]"
+              className={`relative rounded-lg border-2 p-4 sm:p-5 mb-4 transition-all ${
+                (activeHighlightSection === "voice" || activeHighlightSection === "home-voice")
+                  ? "border-amber-500 bg-amber-50/80 ring-4 ring-amber-300 ring-offset-2 scale-[1.02]"
                   : "border-slate-900 bg-slate-50"
               }`}
             >
-              {activeHighlightSection === "voice" && (
-                <div className="absolute -top-7 left-4 bg-amber-500 text-slate-950 text-[11px] font-bold px-2 py-0.5 rounded shadow flex items-center gap-1 animate-bounce z-20">
-                  <span>👇</span>
-                  <span>ผู้สูงอายุกดปุ่มนี้เพื่อพูดแจ้งอาการ</span>
+              {(activeHighlightSection === "voice" || activeHighlightSection === "home-voice") && (
+                <div className="absolute -top-12 left-4 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
+                  <span className="text-lg">👇</span>
+                  <span>ผู้สูงอายุกดปุ่มไมค์นี้เพื่อพูดแจ้งอาการ</span>
                 </div>
               )}
               <div className="flex items-start justify-between gap-3 mb-2">
@@ -1277,43 +1316,45 @@ function PatientHomePage({
                   <div className="text-xs font-bold uppercase tracking-wide text-slate-600">
                     สำหรับผู้สูงอายุ / ไม่สะดวกพิมพ์
                   </div>
-                  <div className="text-sm sm:text-base font-bold text-slate-900 mt-0.5">
+                  <div className="text-base sm:text-lg font-bold text-slate-900 mt-0.5">
                     พูดแจ้งอาการด้วยเสียง (AI ออกบัตรคิวอัตโนมัติ)
                   </div>
                 </div>
-                <Mic className="w-4 h-4 text-slate-900 shrink-0 mt-1" />
+                <div className="rounded-full bg-amber-200 p-2 text-slate-950 border border-amber-300 shrink-0">
+                  <Mic className="w-6 h-6 text-slate-900" />
+                </div>
               </div>
-              <p className="text-xs text-slate-600 mb-3">
+              <p className="text-xs sm:text-sm text-slate-600 mb-4">
                 เพียงพูดชื่อ อายุ อาการป่วย และสิทธิการรักษา ระบบ AI จะกรอกข้อมูลและออกบัตรคิวให้ทันที
               </p>
               <button
                 type="button"
                 onClick={() => setShowVoiceModal(true)}
-                className={`w-full inline-flex items-center justify-center gap-2 rounded-md py-3 px-4 text-xs sm:text-sm font-bold transition-all ${
-                  activeHighlightSection === "voice"
-                    ? "bg-amber-400 text-slate-950 border-2 border-slate-900 shadow-md"
+                className={`w-full inline-flex items-center justify-center gap-3 rounded-lg py-4 px-5 text-base sm:text-lg font-black transition-all shadow-md active:scale-98 ${
+                  (activeHighlightSection === "voice" || activeHighlightSection === "home-voice")
+                    ? "bg-amber-400 text-slate-950 border-2 border-slate-950 ring-4 ring-amber-300"
                     : "bg-slate-900 text-white hover:bg-slate-800"
                 }`}
               >
-                <Mic className="w-4 h-4" />
+                <Mic className="w-8 h-8 text-amber-300 shrink-0" />
                 <span>กดเพื่อพูดแจ้งอาการ (รับบัตรคิวทันที)</span>
               </button>
             </div>
           </div>
 
           <div className="relative">
-            {activeHighlightSection === "form" && (
-              <div className="absolute -top-7 left-4 bg-slate-900 text-white text-[11px] font-bold px-2 py-0.5 rounded shadow flex items-center gap-1 animate-bounce z-20">
-                <span>👇</span>
+            {(activeHighlightSection === "form" || activeHighlightSection === "home-form") && (
+              <div className="absolute -top-12 left-4 bg-slate-900 text-white border-2 border-amber-400 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
+                <span className="text-lg">👇</span>
                 <span>กดปุ่มนี้หากต้องการพิมพ์แบบประเมินเอง</span>
               </div>
             )}
             <button
               type="button"
               onClick={() => setPage("intake")}
-              className={`w-full rounded-md border py-2.5 px-4 text-xs sm:text-sm font-semibold transition-all text-center ${
-                activeHighlightSection === "form"
-                  ? "border-slate-900 bg-slate-100 ring-4 ring-slate-400 text-slate-900 font-bold"
+              className={`w-full rounded-lg border-2 py-3 px-4 text-sm sm:text-base font-bold transition-all text-center ${
+                (activeHighlightSection === "form" || activeHighlightSection === "home-form")
+                  ? "border-slate-900 bg-slate-100 ring-4 ring-slate-400 text-slate-900"
                   : "border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
               }`}
             >
@@ -1519,8 +1560,10 @@ function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
     >
       <div className="w-full max-w-lg rounded-md border border-slate-300 bg-white p-5 sm:p-6 text-slate-900">
         <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200">
-          <div className="flex items-center gap-2">
-            <Mic className="w-4 h-4 text-slate-900" />
+          <div className="flex items-center gap-2.5">
+            <div className="rounded-full bg-amber-200 p-1.5 text-slate-900">
+              <Mic className="w-6 h-6 text-slate-900" />
+            </div>
             <h3 className="text-base sm:text-lg font-bold text-slate-900">
               พูดแจ้งอาการด้วยเสียง (AI ออกบัตรคิวอัตโนมัติ)
             </h3>
@@ -1531,7 +1574,7 @@ function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
               stopListening();
               onClose();
             }}
-            className="rounded px-2 py-1 text-xs font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+            className="rounded px-2.5 py-1 text-sm font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
           >
             ✕
           </button>
@@ -1547,21 +1590,21 @@ function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
           <button
             type="button"
             onClick={isListening ? stopListening : startListening}
-            className={`inline-flex items-center justify-center gap-2.5 rounded-md px-6 py-3.5 text-sm sm:text-base font-bold text-white transition-colors ${
+            className={`inline-flex items-center justify-center gap-3 rounded-lg px-7 py-4 text-base sm:text-lg font-black text-white transition-all shadow-md active:scale-98 ${
               isListening
-                ? "bg-red-600 hover:bg-red-700 border-2 border-red-800"
-                : "bg-slate-900 hover:bg-slate-800"
+                ? "bg-red-600 hover:bg-red-700 border-2 border-red-800 animate-pulse"
+                : "bg-slate-900 hover:bg-slate-800 border-2 border-slate-900"
             }`}
           >
             {isListening ? (
               <>
-                <MicOff className="w-4 h-4" />
+                <MicOff className="w-8 h-8 text-white shrink-0" />
                 <span>กำลังฟังเสียงของท่าน... (กดเพื่อหยุด)</span>
               </>
             ) : (
               <>
-                <Mic className="w-4 h-4" />
-                <span>🎤 กดปุ่มนี้เพื่อเริ่มพูด</span>
+                <Mic className="w-8 h-8 text-amber-300 shrink-0" />
+                <span>กดปุ่มนี้เพื่อเริ่มพูด</span>
               </>
             )}
           </button>
@@ -1675,6 +1718,7 @@ function PatientTicketPage({
   onLookupTicket,
   onTriggerSOS,
   isSpeaking,
+  activeHighlightSection,
   onSpeakTicket,
   onStopSpeech,
 }) {
@@ -1793,39 +1837,51 @@ function PatientTicketPage({
       )}
 
       {/* Top Action Bar for Read Aloud & Print (Screen Only) */}
-      <div className="no-print mb-4 flex items-center justify-between gap-2 flex-wrap">
+      <div className="no-print mb-4 flex items-center justify-between gap-3 flex-wrap">
         <div className="text-xs sm:text-sm font-bold text-slate-700">
           ตัวอย่างสลิปบัตรคิว
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-2.5 flex-wrap">
           {onSpeakTicket && (
             <button
               type="button"
               onClick={isSpeaking ? onStopSpeech : onSpeakTicket}
-              className="inline-flex items-center gap-1.5 rounded-md border-2 border-slate-900 bg-amber-300 px-3.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400 transition-colors"
+              className="inline-flex items-center gap-2 rounded-lg border-2 border-slate-900 bg-amber-300 px-4 py-2 text-xs sm:text-sm font-extrabold text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"
             >
               {isSpeaking ? (
                 <>
-                  <VolumeX className="w-3.5 h-3.5 text-red-700" />
+                  <VolumeX className="w-5 h-5 text-red-700 shrink-0" />
                   <span>หยุดเสียงอ่าน</span>
                 </>
               ) : (
                 <>
-                  <Volume2 className="w-3.5 h-3.5 text-slate-950" />
+                  <Volume2 className="w-5 h-5 text-slate-950 shrink-0" />
                   <span>🔊 อ่านบัตรคิวให้ฟัง</span>
                 </>
               )}
             </button>
           )}
 
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3.5 py-1.5 text-xs font-bold text-white hover:bg-slate-800 transition-colors"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            <span>พิมพ์สลิปบัตรคิว</span>
-          </button>
+          <div className="relative">
+            {activeHighlightSection === "ticket-print" && (
+              <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+                <span className="text-lg">👇</span>
+                <span>กดปุ่มนี้เพื่อพิมพ์สลิปบัตรคิว</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => window.print()}
+              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-extrabold text-white transition-all shadow-sm ${
+                activeHighlightSection === "ticket-print"
+                  ? "bg-slate-900 ring-4 ring-amber-400 ring-offset-2 scale-105"
+                  : "bg-slate-900 hover:bg-slate-800"
+              }`}
+            >
+              <Printer className="w-4 h-4" />
+              <span>พิมพ์สลิปบัตรคิว</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1844,7 +1900,19 @@ function PatientTicketPage({
         </div>
 
         {/* Giant Queue Number */}
-        <div className="text-center py-2 border-b border-black mb-2">
+        <div
+          className={`relative text-center py-2 border-b border-black mb-2 transition-all ${
+            activeHighlightSection === "ticket-queue"
+              ? "bg-amber-100/70 ring-4 ring-amber-400 rounded"
+              : ""
+          }`}
+        >
+          {activeHighlightSection === "ticket-queue" && (
+            <div className="no-print absolute -top-11 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+              <span className="text-lg">👇</span>
+              <span>หมายเลขคิวรับบริการของคุณ</span>
+            </div>
+          )}
           <div className="text-xs font-bold">หมายเลขคิวรับบริการ / Queue No.</div>
           <div className="text-4xl font-black tracking-wider my-1">
             {ticket.queueNumber || "A-045"}
@@ -1855,7 +1923,19 @@ function PatientTicketPage({
         </div>
 
         {/* Essential Patient & Appointment Details */}
-        <div className="text-xs space-y-1 border-b border-black pb-2.5 mb-2.5">
+        <div
+          className={`relative text-xs space-y-1 border-b border-black pb-2.5 mb-2.5 transition-all ${
+            activeHighlightSection === "ticket-dept"
+              ? "bg-amber-100/70 ring-4 ring-amber-400 rounded p-1.5"
+              : ""
+          }`}
+        >
+          {activeHighlightSection === "ticket-dept" && (
+            <div className="no-print absolute -top-11 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+              <span className="text-lg">👇</span>
+              <span>แผนกตรวจและเวลาเข้าพบแพทย์</span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="font-bold">ชื่อ-สกุล:</span>
             <span className="font-semibold text-right">
@@ -1920,7 +2000,19 @@ function PatientTicketPage({
       {/* ─── SCREEN-ONLY AUXILIARY SECTIONS (HIDDEN ON PRINT) ─── */}
       <div className="no-print mt-6">
         {/* Smiley Satisfaction Rating Box (Hospital Kiosk Feedback Terminal) */}
-        <div className="mb-5 rounded-md border border-slate-200 bg-white p-4 text-center">
+        <div
+          className={`relative mb-5 rounded-lg border-2 p-4 text-center transition-all ${
+            activeHighlightSection === "ticket-rating"
+              ? "border-amber-500 bg-amber-50/80 ring-4 ring-amber-300 ring-offset-2 scale-[1.01]"
+              : "border-slate-200 bg-white"
+          }`}
+        >
+          {activeHighlightSection === "ticket-rating" && (
+            <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
+              <span className="text-lg">👇</span>
+              <span>กดรูปหน้ายิ้มเพื่อประเมินความพึงพอใจการบริการ</span>
+            </div>
+          )}
           <div className="text-xs sm:text-sm font-bold text-slate-900 mb-1">
             ประเมินความพึงพอใจการใช้บริการตู้คัดกรองอัตโนมัติ
           </div>
@@ -2804,7 +2896,7 @@ function AppointmentsPage({ appointments, onUpdateAppointment }) {
 }
 
 // ─── INTAKE PAGE (PATIENT SELF-SCREENING) ─────────────────────────────────────
-function IntakePage({ onSubmit, isSpeaking, onSpeak, onStopSpeech }) {
+function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onStopSpeech }) {
   const [step, setStep] = useState(0);
   const [form, setForm] = useState({ ...BLANK_FORM });
   const [aiResult, setAiResult] = useState(null);
@@ -2861,23 +2953,25 @@ function IntakePage({ onSubmit, isSpeaking, onSpeak, onStopSpeech }) {
           แบบประเมินอาการเบื้องต้นสำหรับผู้ป่วย
         </div>
         {onSpeak && (
-          <button
-            type="button"
-            onClick={isSpeaking ? onStopSpeech : () => onSpeak(STEP_SPEECH[step])}
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50 transition-colors"
-          >
-            {isSpeaking ? (
-              <>
-                <VolumeX className="w-3.5 h-3.5 text-red-600" />
-                <span>หยุดเสียงอ่าน</span>
-              </>
-            ) : (
-              <>
-                <Volume2 className="w-3.5 h-3.5 text-slate-700" />
-                <span>ฟังคำแนะนำขั้นตอนที่ {step + 1}</span>
-              </>
-            )}
-          </button>
+          <div className="relative">
+            <button
+              type="button"
+              onClick={isSpeaking ? onStopSpeech : () => onSpeak(STEP_SPEECH[step], `intake-${step}`)}
+              className="inline-flex items-center gap-2 rounded-lg border-2 border-slate-900 bg-amber-300 px-4 py-2 text-xs sm:text-sm font-extrabold text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"
+            >
+              {isSpeaking ? (
+                <>
+                  <VolumeX className="w-5 h-5 text-red-700 shrink-0" />
+                  <span>หยุดเสียงอ่าน</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-5 h-5 text-slate-950 shrink-0" />
+                  <span>🔊 ฟังคำแนะนำขั้นตอนที่ {step + 1}</span>
+                </>
+              )}
+            </button>
+          </div>
         )}
       </div>
       <div className="intake-card">
@@ -2893,7 +2987,26 @@ function IntakePage({ onSubmit, isSpeaking, onSpeak, onStopSpeech }) {
         <div className="intake-body">
           <div className="progress-bar"><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
 
-          <div key={step} className="step-transition">
+          <div className="relative">
+            {activeHighlightSection === "intake-fields" && (
+              <div className="absolute -top-10 left-4 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
+                <span className="text-lg">👇</span>
+                <span>
+                  {step === 0 && "กรุณากรอกข้อมูลส่วนตัวและสิทธิการรักษา"}
+                  {step === 1 && "กรอกสัญญาณชีพ หรือกดข้ามได้หากไม่ได้วัด"}
+                  {step === 2 && "เลือกอาการที่ท่านเป็น และระดับความรุนแรง"}
+                  {step === 3 && "ตรวจสอบความถูกต้องของข้อมูลก่อนรับบัตรคิว"}
+                </span>
+              </div>
+            )}
+            <div
+              key={step}
+              className={`step-transition ${
+                activeHighlightSection === "intake-fields"
+                  ? "ring-4 ring-amber-300 rounded-lg p-2 bg-amber-50/40 border border-amber-300 transition-all"
+                  : ""
+              }`}
+            >
             {step === 0 && (
             <>
               <div className="field-row">
@@ -3088,16 +3201,51 @@ function IntakePage({ onSubmit, isSpeaking, onSpeak, onStopSpeech }) {
             </>
           )}
           </div>
+          </div>
 
-          <div className="btn-row">
+          <div className="btn-row relative">
             {step > 0 && <button className="btn btn-ghost" onClick={() => setStep((s) => s - 1)}>← ย้อนกลับ</button>}
             {step < 3 && (
-              <button className="btn btn-primary" disabled={!canNext[step]} onClick={() => setStep((s) => s + 1)}>ถัดไป →</button>
+              <div className="relative inline-block">
+                {activeHighlightSection === "intake-next" && (
+                  <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap flex items-center gap-1.5 animate-bounce z-20">
+                    <span className="text-lg">👇</span>
+                    <span>กรอกเรียบร้อยแล้ว กดปุ่มถัดไปตรงนี้</span>
+                  </div>
+                )}
+                <button
+                  className={`btn btn-primary ${
+                    activeHighlightSection === "intake-next"
+                      ? "ring-4 ring-amber-400 ring-offset-2 animate-pulse font-bold"
+                      : ""
+                  }`}
+                  disabled={!canNext[step]}
+                  onClick={() => setStep((s) => s + 1)}
+                >
+                  ถัดไป →
+                </button>
+              </div>
             )}
             {step === 3 && (
-              <button className="btn btn-success" disabled={saving} onClick={submit}>
-                {saving ? "กำลังออกบัตรคิว..." : "✓ ยืนยันข้อมูลและรับบัตรคิว"}
-              </button>
+              <div className="relative inline-block">
+                {activeHighlightSection === "intake-submit" && (
+                  <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-emerald-600 text-white border-2 border-white text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap flex items-center gap-1.5 animate-bounce z-20">
+                    <span className="text-lg">👇</span>
+                    <span>กดปุ่มสีเขียวนี้เพื่อรับบัตรคิวทันที</span>
+                  </div>
+                )}
+                <button
+                  className={`btn btn-success ${
+                    activeHighlightSection === "intake-submit"
+                      ? "ring-4 ring-emerald-400 ring-offset-2 animate-pulse font-black"
+                      : ""
+                  }`}
+                  disabled={saving}
+                  onClick={submit}
+                >
+                  {saving ? "กำลังออกบัตรคิว..." : "✓ ยืนยันข้อมูลและรับบัตรคิว"}
+                </button>
+              </div>
             )}
           </div>
         </div>
