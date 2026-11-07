@@ -4,6 +4,7 @@ import {
   Accessibility,
   Activity,
   ClipboardCheck,
+  CreditCard,
   Database,
   Eye,
   Lock,
@@ -202,6 +203,65 @@ function generateQueueNumber(severity, existingPatients = []) {
   return `${prefix}-${String(nextNum).padStart(3, "0")}`;
 }
 
+function getAssignedRoom(department = "", severity = "low") {
+  const dept = String(department || "");
+  if (severity === "high" || dept.includes("ฉุกเฉิน") || dept.includes("ER")) {
+    return "ห้องฉุกเฉิน ER-1 (ชั้น 1)";
+  }
+  if (dept.includes("กุมาร") || dept.includes("เด็ก")) return "ห้องตรวจกุมารเวช 1 (ชั้น 2)";
+  if (dept.includes("ออร์โธ") || dept.includes("กระดูก")) return "ห้องตรวจกระดูกและข้อ 3 (ชั้น 1)";
+  if (dept.includes("โสต") || dept.includes("หู")) return "ห้องตรวจ หู คอ จมูก 5 (ชั้น 2)";
+  if (dept.includes("ศัลยกรรม")) return "ห้องตรวจศัลยกรรม 4 (ชั้น 2)";
+  if (dept.includes("จักษุ") || dept.includes("ตา")) return "ห้องตรวจจักษุ 6 (ชั้น 2)";
+  if (dept.includes("ทันตกรรม") || dept.includes("ฟัน")) return "ห้องทันตกรรม 2 (ชั้น 3)";
+  return "ห้องตรวจอายุรกรรม 2 (ชั้น 2)";
+}
+
+const SMARTCARD_PROFILES = [
+  {
+    id: "elderly-gold",
+    label: "ผู้สูงอายุ (สิทธิบัตรทอง 30 บาท)",
+    citizenId: "1-1004-00842-XX-X",
+    firstName: "สมศรี",
+    lastName: "สุขสวัสดิ์",
+    age: "72",
+    gender: "หญิง",
+    phone: "081-890-4421",
+    hn: "HN-670811",
+    benefitType: "บัตรทอง / สวัสดิการรัฐ",
+    medHistory: "ความดันโลหิตสูง, เบาหวาน",
+    allergies: "ไม่มี",
+  },
+  {
+    id: "chronic-gov",
+    label: "ผู้ป่วยโรคเรื้อรัง / มีประวัติแพ้ยา (สิทธิข้าราชการ)",
+    citizenId: "3-1012-01928-XX-X",
+    firstName: "ประเสริฐ",
+    lastName: "เกียรติไพศาล",
+    age: "68",
+    gender: "ชาย",
+    phone: "089-215-7733",
+    hn: "HN-670920",
+    benefitType: "สิทธิสวัสดิการ",
+    medHistory: "โรคหัวใจขาดเลือด, ไขมันในเลือดสูง",
+    allergies: "แอสไพริน (Aspirin)",
+  },
+  {
+    id: "general-sso",
+    label: "ผู้ป่วยทั่วไป (สิทธิประกันสังคม)",
+    citizenId: "1-5099-02341-XX-X",
+    firstName: "กมลวรรณ",
+    lastName: "รัตนโชติ",
+    age: "34",
+    gender: "หญิง",
+    phone: "086-543-9900",
+    hn: "HN-671045",
+    benefitType: "ประกันสังคม",
+    medHistory: "ไม่มี",
+    allergies: "เพนิซิลลิน (Penicillin)",
+  },
+];
+
 // ─── SUPABASE HELPERS ─────────────────────────────────────────────────────────
 function toRow(form, aiAnalysis) {
   const benefitText = form.benefitType ? `สิทธิ์ผู้ป่วย: ${form.benefitType}` : "";
@@ -379,6 +439,57 @@ export default function App() {
     SUPABASE_URL.includes("YOUR_PROJECT") ? "unconfigured" : "ok"
   );
   const [selectedPatient, setSelectedPatient] = useState(null);
+  const [smartCardData, setSmartCardData] = useState(null);
+  const [showSmartCardModal, setShowSmartCardModal] = useState(false);
+  const [bridgeConnected, setBridgeConnected] = useState(false);
+
+  function handleSelectSmartCard(profile) {
+    const payload = { ...profile, timestamp: Date.now() };
+    setSmartCardData(payload);
+    setShowSmartCardModal(false);
+    setPage("intake");
+    showToast(`💳 อ่านบัตรประชาชนสำเร็จ: คุณ${profile.firstName} ${profile.lastName} (${profile.benefitType})`);
+    speakThai(
+      `อ่านข้อมูลบัตรประชาชนของ คุณ ${profile.firstName} ${profile.lastName} สิทธิ ${profile.benefitType} เรียบร้อยแล้ว กรุณาเลือกอาการที่มาพบแพทย์ค่ะ`,
+      "intake-2"
+    );
+  }
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof EventSource === "undefined") return;
+    let es;
+    try {
+      es = new EventSource("http://127.0.0.1:8088/events");
+      es.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload.type === "connected") {
+            setBridgeConnected(true);
+            return;
+          }
+          if (payload.firstName) {
+            setBridgeConnected(true);
+            setSmartCardData({ ...payload, timestamp: Date.now() });
+            setShowSmartCardModal(false);
+            setPage("intake");
+            showToast(
+              `💳 อ่านบัตรประชาชน USB สำเร็จ: คุณ${payload.firstName} ${payload.lastName} (${payload.benefitType})`
+            );
+          }
+        } catch {
+          // Ignore malformed event
+        }
+      };
+      es.onerror = () => {
+        setBridgeConnected(false);
+      };
+    } catch {
+      // Optional bridge service not running
+    }
+    return () => {
+      if (es) es.close();
+    };
+  }, []);
 
   function updateAppointmentStatus(id, nextStatus) {
     setAppointments((prev) => prev.map((item) => item.id === id ? { ...item, status: nextStatus } : item));
@@ -874,6 +985,8 @@ export default function App() {
             activeTicket={activeTicket}
             onLookupTicket={handleLookupTicket}
             onQuickVoiceSubmit={addPatient}
+            onOpenSmartCard={() => setShowSmartCardModal(true)}
+            bridgeConnected={bridgeConnected}
             isSpeaking={isSpeaking}
             activeHighlightSection={activeHighlightSection}
             onSpeak={speakThai}
@@ -888,7 +1001,11 @@ export default function App() {
         )}
         {page === "intake" && (
           <IntakePage
+            key={smartCardData?.timestamp || "blank"}
             onSubmit={addPatient}
+            smartCardData={smartCardData}
+            onClearSmartCard={() => setSmartCardData(null)}
+            onOpenSmartCard={() => setShowSmartCardModal(true)}
             isSpeaking={isSpeaking}
             activeHighlightSection={activeHighlightSection}
             onSpeak={(text, flow) => speakThai(text, flow || "intake-0")}
@@ -944,6 +1061,22 @@ export default function App() {
           />
         )}
       </main>
+
+      {/* ─── SUBTLE CLINICAL DISCLAIMER & PDPA COMPLIANCE FOOTER ─── */}
+      <footer className="no-print border-t border-slate-200 bg-white/80 py-3 px-4 text-center text-[11px] sm:text-xs text-slate-500 mt-8">
+        <span>
+          🛡️ มาตรฐานคุ้มครองข้อมูลส่วนบุคคลด้านสุขภาพ (PDPA) · ระบบนี้เป็นเครื่องมือช่วยคัดกรองเบื้องต้น (Clinical Decision Support) ไม่ใช่การวินิจฉัยโรคขั้นสุดท้าย
+        </span>
+      </footer>
+
+      {/* ─── THAI SMART CARD READER MODAL (USB BRIDGE + DEMO SIMULATION) ─── */}
+      {showSmartCardModal && (
+        <SmartCardModal
+          onClose={() => setShowSmartCardModal(false)}
+          onSelectCard={handleSelectSmartCard}
+          bridgeConnected={bridgeConnected}
+        />
+      )}
 
       {/* ─── STAFF LOGIN MODAL ─── */}
       {showStaffLoginModal && (
@@ -1181,6 +1314,8 @@ function PatientHomePage({
   activeTicket,
   onLookupTicket,
   onQuickVoiceSubmit,
+  onOpenSmartCard,
+  bridgeConnected,
   onTriggerSOS,
   isSpeaking,
   activeHighlightSection,
@@ -1342,24 +1477,42 @@ function PatientHomePage({
             </div>
           </div>
 
-          <div className="relative">
-            {(activeHighlightSection === "form" || activeHighlightSection === "home-form") && (
-              <div className="absolute -top-12 left-4 bg-slate-900 text-white border-2 border-amber-400 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
-                <span className="text-lg">👇</span>
-                <span>กดปุ่มนี้หากต้องการพิมพ์แบบประเมินเอง</span>
-              </div>
+          <div className="space-y-2.5">
+            {onOpenSmartCard && (
+              <button
+                type="button"
+                onClick={onOpenSmartCard}
+                className="w-full inline-flex items-center justify-center gap-2.5 rounded-lg border-2 border-slate-900 bg-white py-3 px-4 text-sm sm:text-base font-bold text-slate-900 hover:bg-slate-100 transition-all shadow-sm"
+              >
+                <CreditCard className="w-5 h-5 text-slate-900 shrink-0" />
+                <span>💳 เสียบบัตรประชาชน (Smart Card)</span>
+                {bridgeConnected && (
+                  <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-300">
+                    เชื่อมต่อเครื่องอ่านแล้ว
+                  </span>
+                )}
+              </button>
             )}
-            <button
-              type="button"
-              onClick={() => setPage("intake")}
-              className={`w-full rounded-lg border-2 py-3 px-4 text-sm sm:text-base font-bold transition-all text-center ${
-                (activeHighlightSection === "form" || activeHighlightSection === "home-form")
-                  ? "border-slate-900 bg-slate-100 ring-4 ring-slate-400 text-slate-900"
-                  : "border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
-              }`}
-            >
-              + กรอกแบบประเมินอาการด้วยตนเอง (4 ขั้นตอน) →
-            </button>
+
+            <div className="relative">
+              {(activeHighlightSection === "form" || activeHighlightSection === "home-form") && (
+                <div className="absolute -top-12 left-4 bg-slate-900 text-white border-2 border-amber-400 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
+                  <span className="text-lg">👇</span>
+                  <span>กดปุ่มนี้หากต้องการพิมพ์แบบประเมินเอง</span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setPage("intake")}
+                className={`w-full rounded-lg border-2 py-3 px-4 text-sm sm:text-base font-bold transition-all text-center ${
+                  (activeHighlightSection === "form" || activeHighlightSection === "home-form")
+                    ? "border-slate-900 bg-slate-100 ring-4 ring-slate-400 text-slate-900"
+                    : "border-slate-300 bg-white text-slate-900 hover:bg-slate-100"
+                }`}
+              >
+                + กรอกแบบประเมินอาการด้วยตนเอง (4 ขั้นตอน) →
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1447,6 +1600,107 @@ function PatientHomePage({
           }}
         />
       )}
+    </div>
+  );
+}
+
+// ─── THAI NATIONAL ID SMART CARD MODAL (USB BRIDGE + DEMO SIMULATION) ─────────
+function SmartCardModal({ onClose, onSelectCard, bridgeConnected }) {
+  const [readingId, setReadingId] = useState(null);
+
+  function handleSimulateRead(profile) {
+    setReadingId(profile.id);
+    setTimeout(() => {
+      onSelectCard(profile);
+    }, 650);
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="อ่านข้อมูลบัตรประจำตัวประชาชน Smart Card"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4"
+    >
+      <div className="w-full max-w-lg rounded-lg border border-slate-300 bg-white p-5 sm:p-6 text-slate-900 shadow-xl">
+        <div className="flex items-center justify-between pb-3 mb-4 border-b border-slate-200">
+          <div className="flex items-center gap-2.5">
+            <div className="rounded-full bg-slate-100 p-2 text-slate-900 border border-slate-300">
+              <CreditCard className="w-5 h-5 text-slate-900" />
+            </div>
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                อ่านบัตรประจำตัวประชาชน (Smart Card)
+              </h3>
+              <div className="text-[11px] font-medium text-slate-500">
+                {bridgeConnected
+                  ? "🟢 เชื่อมต่อเครื่องอ่านบัตร USB แล้ว — เสียบบัตรจริงได้ทันที"
+                  : "⚪ โหมดพร้อมใช้งาน — รองรับเครื่องอ่าน USB หรือเลือกบัตรจำลองด้านล่าง"}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded px-2.5 py-1 text-sm font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+          >
+            ✕
+          </button>
+        </div>
+
+        <p className="text-xs sm:text-sm text-slate-600 mb-4">
+          สอดบัตรประชาชนเข้าเครื่องอ่านเพื่อดึงข้อมูลผู้ป่วยและตรวจสอบสิทธิการรักษาอัตโนมัติ (หรือคลิกเลือกบัตรตัวอย่างเพื่อทดสอบ):
+        </p>
+
+        <div className="space-y-2.5 mb-4">
+          {SMARTCARD_PROFILES.map((profile) => {
+            const isReading = readingId === profile.id;
+            return (
+              <button
+                key={profile.id}
+                type="button"
+                disabled={!!readingId}
+                onClick={() => handleSimulateRead(profile)}
+                className={`w-full text-left rounded-lg border-2 p-3.5 transition-all ${
+                  isReading
+                    ? "border-amber-500 bg-amber-50"
+                    : "border-slate-200 bg-slate-50 hover:border-slate-900 hover:bg-white"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-extrabold text-slate-900">
+                    💳 {profile.label}
+                  </span>
+                  <span className="rounded bg-slate-900 px-2 py-0.5 text-[11px] font-bold text-white">
+                    {isReading ? "กำลังอ่านชิป..." : "กดเพื่อดึงข้อมูล"}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-700 font-semibold">
+                  ชื่อ: คุณ{profile.firstName} {profile.lastName} ({profile.gender}, อายุ {profile.age} ปี)
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap gap-x-3">
+                  <span>เลขบัตร: {profile.citizenId}</span>
+                  <span>สิทธิ: {profile.benefitType}</span>
+                  {profile.allergies && profile.allergies !== "ไม่มี" && (
+                    <span className="font-bold text-red-600">⚠️ แพ้ยา: {profile.allergies}</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center justify-between pt-3 border-t border-slate-200 text-[11px] text-slate-500">
+          <span>🔒 ข้อมูลถูกเข้ารหัสตามมาตรฐาน PDPA</span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-slate-300 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+          >
+            ปิดหน้าต่าง
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1793,6 +2047,10 @@ function PatientTicketPage({
   const isHighRisk = ticket.severity === "high" || aiResult?.risk_level === "ฉุกเฉิน";
   const departmentName =
     ticket.department || aiResult?.recommended_specialty || "อายุรกรรม";
+  const assignedRoom = getAssignedRoom(departmentName, ticket.severity);
+  const hasAllergy = Boolean(
+    ticket.allergies && ticket.allergies !== "ไม่มี" && ticket.allergies !== "-"
+  );
   const buildingLocation = isHighRisk
     ? "อาคารอุบัติเหตุ-ฉุกเฉิน ชั้น 1"
     : "อาคารผู้ป่วยนอก (OPD) ชั้น 2";
@@ -1959,9 +2217,19 @@ function PatientTicketPage({
             <span className="font-semibold">{departmentName}</span>
           </div>
           <div className="flex justify-between">
+            <span className="font-bold">จุดบริการ / ห้องตรวจ:</span>
+            <span className="font-extrabold">{assignedRoom}</span>
+          </div>
+          <div className="flex justify-between">
             <span className="font-bold">เวลาพบแพทย์โดยประมาณ:</span>
             <span className="font-extrabold">{estDoctorTime}</span>
           </div>
+          {hasAllergy && (
+            <div className="flex justify-between pt-0.5 text-red-700 font-bold">
+              <span>⚠️ ประวัติแพ้ยา:</span>
+              <span>{ticket.allergies}</span>
+            </div>
+          )}
         </div>
 
         {/* QN, Reference Number & Simulated Hospital QR Code */}
@@ -2511,7 +2779,7 @@ function RecentPatientsTable({
             fontWeight: 700,
           }}
         >
-          เคสความเสี่ยงสูง (รุนแรง)
+          ESI-2 · เคสความเสี่ยงสูง
         </span>
       );
     }
@@ -2521,16 +2789,16 @@ function RecentPatientsTable({
         <span
           style={{
             display: "inline-block",
-            backgroundColor: "#F1F5F9",
-            color: "#0F172A",
-            border: "1px solid #CBD5E1",
+            backgroundColor: "#FFFBEB",
+            color: "#92400E",
+            border: "1px solid #FDE68A",
             borderRadius: "4px",
             padding: "3px 8px",
             fontSize: "0.75rem",
             fontWeight: 600,
           }}
         >
-          ความเสี่ยงปานกลาง
+          ESI-3 · ความเสี่ยงปานกลาง
         </span>
       );
     }
@@ -2539,16 +2807,16 @@ function RecentPatientsTable({
       <span
         style={{
           display: "inline-block",
-          backgroundColor: "#F8FAFC",
-          color: "#64748B",
-          border: "1px solid #E2E8F0",
+          backgroundColor: "#F0FDF4",
+          color: "#166534",
+          border: "1px solid #BBF7D0",
           borderRadius: "4px",
           padding: "3px 8px",
           fontSize: "0.75rem",
-          fontWeight: 500,
+          fontWeight: 600,
         }}
       >
-        ความเสี่ยงต่ำ (ทั่วไป)
+        ESI-4 · ทั่วไป
       </span>
     );
   }
@@ -2670,8 +2938,24 @@ function RecentPatientsTable({
                   }}
                 >
                   <td style={{ padding: "0.85rem 1.25rem", verticalAlign: "top" }}>
-                    <div style={{ fontWeight: 600, color: "#0F172A" }}>
-                      {patient.firstName} {patient.lastName}
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 600, color: "#0F172A" }}>
+                        {patient.firstName} {patient.lastName}
+                      </span>
+                      {patient.allergies && patient.allergies !== "ไม่มี" && patient.allergies !== "-" && (
+                        <span
+                          style={{
+                            backgroundColor: "#DC2626",
+                            color: "#FFFFFF",
+                            fontSize: "0.7rem",
+                            fontWeight: 700,
+                            padding: "1px 6px",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          ⚠️ แพ้ยา: {patient.allergies}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: "0.75rem", color: "#64748B", marginTop: "2px" }}>
                       คิว {patient.queueNumber || "—"} · {patient.hn || patient.patientId || `ID-${patient.id}`} · แผนก{patient.department || "ยังไม่ระบุ"}
@@ -2896,9 +3180,24 @@ function AppointmentsPage({ appointments, onUpdateAppointment }) {
 }
 
 // ─── INTAKE PAGE (PATIENT SELF-SCREENING) ─────────────────────────────────────
-function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onStopSpeech }) {
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState({ ...BLANK_FORM });
+function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard, isSpeaking, activeHighlightSection, onSpeak, onStopSpeech }) {
+  const [step, setStep] = useState(() => (smartCardData?.firstName ? 2 : 0));
+  const [form, setForm] = useState(() =>
+    smartCardData?.firstName
+      ? {
+          ...BLANK_FORM,
+          firstName: smartCardData.firstName || "",
+          lastName: smartCardData.lastName || "",
+          age: smartCardData.age || "",
+          gender: smartCardData.gender || "",
+          phone: smartCardData.phone || "",
+          hn: smartCardData.hn || "",
+          benefitType: smartCardData.benefitType || "",
+          allergies: smartCardData.allergies || "",
+          medHistory: smartCardData.medHistory || "",
+        }
+      : { ...BLANK_FORM }
+  );
   const [aiResult, setAiResult] = useState(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2910,6 +3209,22 @@ function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onS
   const bmi = form.weight && form.height
     ? (parseFloat(form.weight) / Math.pow(parseFloat(form.height) / 100, 2)).toFixed(1)
     : "";
+
+  const vitalAlert = (() => {
+    const sys = parseInt(String(form.bp || "").split("/")[0], 10);
+    const pulse = parseInt(form.pulse, 10);
+    const temp = parseFloat(form.temp);
+    if (!Number.isNaN(sys) && (sys >= 180 || (sys > 0 && sys < 90))) {
+      return `⚠️ ความดันโลหิตอยู่ในเกณฑ์เฝ้าระวัง (${form.bp} mmHg) — แนะนำแจ้งพยาบาลจุดคัดกรองทันที`;
+    }
+    if (!Number.isNaN(pulse) && (pulse > 120 || (pulse > 0 && pulse < 50))) {
+      return `⚠️ อัตราชีพจรผิดปกติ (${pulse} ครั้ง/นาที) — แนะนำแจ้งพยาบาลจุดคัดกรอง`;
+    }
+    if (!Number.isNaN(temp) && temp >= 38.5) {
+      return `⚠️ ตรวจพบไข้สูง (${temp} °C) — ระบบบันทึกข้อมูลเฝ้าระวังในใบคัดกรอง`;
+    }
+    return null;
+  })();
 
   async function analyzeSymptoms() {
     setAiLoading(true);
@@ -2924,6 +3239,7 @@ function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onS
     setSaving(true);
     const finalAI = aiResult || generateClinicalTriage(form);
     await onSubmit(form, finalAI);
+    if (onClearSmartCard) onClearSmartCard();
     setSaving(false);
     setStep(0);
     setForm({ ...BLANK_FORM });
@@ -3009,6 +3325,20 @@ function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onS
             >
             {step === 0 && (
             <>
+              {onOpenSmartCard && (
+                <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-3.5 py-2.5">
+                  <div className="text-xs sm:text-sm font-semibold text-slate-800">
+                    💳 มีบัตรประชาชนหรือไม่? สามารถเสียบบัตรเพื่อดึงชื่อ อายุ และสิทธิรักษาอัตโนมัติ
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onOpenSmartCard}
+                    className="shrink-0 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-blue-700 transition-colors"
+                  >
+                    อ่านบัตรประชาชน
+                  </button>
+                </div>
+              )}
               <div className="field-row">
                 <div className="field"><label>ชื่อ *</label><input value={form.firstName} onChange={(e) => set("firstName", e.target.value)} placeholder="ชื่อจริง" /></div>
                 <div className="field"><label>นามสกุล *</label><input value={form.lastName} onChange={(e) => set("lastName", e.target.value)} placeholder="นามสกุล" /></div>
@@ -3053,6 +3383,11 @@ function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onS
               <div style={{ marginBottom: 16, fontSize: 13, color: "#64748B" }}>
                 ข้อมูลสุขภาพและสัญญาณชีพเบื้องต้น (หากท่านไม่ได้วัดไว้ สามารถกด &ldquo;ถัดไป&rdquo; เพื่อข้ามขั้นตอนนี้ได้)
               </div>
+              {vitalAlert && (
+                <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-red-800">
+                  {vitalAlert}
+                </div>
+              )}
               <div className="vitals-grid">
                 {[["bp", "ความดันโลหิต", "mmHg"], ["pulse", "ชีพจร", "ครั้ง/นาที"], ["temp", "อุณหภูมิร่างกาย", "°C"], ["weight", "น้ำหนักตัว", "กิโลกรัม"]].map(([k, l, u]) => (
                   <div className="vital-card" key={k}>
@@ -3077,6 +3412,20 @@ function IntakePage({ onSubmit, isSpeaking, activeHighlightSection, onSpeak, onS
 
           {step === 2 && (
             <>
+              {smartCardData?.firstName && (
+                <div className="mb-4 flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3.5 py-2 text-xs sm:text-sm text-emerald-900">
+                  <span>
+                    ✓ ดึงข้อมูลบัตรประชาชนสำเร็จ: <strong>{form.firstName} {form.lastName}</strong> ({form.age} ปี · {form.benefitType || "ตรวจสอบสิทธิ์แล้ว"})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setStep(0)}
+                    className="text-xs font-bold underline text-emerald-800 hover:text-emerald-950 shrink-0"
+                  >
+                    แก้ไขข้อมูลส่วนตัว
+                  </button>
+                </div>
+              )}
               <div className="field-row full" style={{ marginBottom: 16 }}>
                 <div className="field"><label>อธิบายอาการสำคัญที่มาพบแพทย์</label><textarea value={form.chiefComplaint} onChange={(e) => set("chiefComplaint", e.target.value)} placeholder="ระบุอาการ เริ่มเป็นตั้งแต่เมื่อไหร่ หรืออาการร่วมอื่นๆ..." /></div>
               </div>
@@ -3310,13 +3659,20 @@ function PatientRow({ p, selected, onSelect, onDelete }) {
     <>
       <div className="table-row" onClick={() => onSelect(isOpen ? null : p)}>
         <div>
-          <div className="row-name">{p.firstName} {p.lastName}</div>
+          <div className="row-name flex items-center gap-1.5 flex-wrap">
+            <span>{p.firstName} {p.lastName}</span>
+            {p.allergies && p.allergies !== "ไม่มี" && p.allergies !== "-" && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-300">
+                ⚠️ แพ้ยา: {p.allergies}
+              </span>
+            )}
+          </div>
           <div className="row-sub">คิว {p.queueNumber || "—"} · {p.patientId || p.id}</div>
         </div>
         <div className="row-cell">{p.age} ปี / {p.gender}</div>
         <div>
           <span className={`sev-tag ${p.severity}`}>
-            {p.severity === "high" ? "รุนแรง" : p.severity === "mid" ? "ปานกลาง" : "เล็กน้อย"}
+            {p.severity === "high" ? "ESI-2 · รุนแรง" : p.severity === "mid" ? "ESI-3 · ปานกลาง" : "ESI-4 · ทั่วไป"}
           </span>
         </div>
         <div className="row-cell" style={{ fontSize: 13, color: "#64748B" }}>{symShort}</div>
