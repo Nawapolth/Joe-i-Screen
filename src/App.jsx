@@ -33,6 +33,7 @@ import {
   formatPatientPrompt,
   generateClinicalTriage,
   parseVoicePatientTranscript,
+  transcribeSpeechAudio,
 } from "./api";
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
@@ -1729,58 +1730,85 @@ function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [recognitionInstance, setRecognitionInstance] = useState(null);
 
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const mediaStreamRef = useRef(null);
+
   const samplePhrases = [
     "ยายชื่อสมศรี ใจดี อายุ 72 ปี มีไข้ ไอ ปวดหัว มา 2 วัน ใช้สิทธิบัตรทองผู้สูงอายุ",
     "ลุงชื่อสมหมาย รักไทย อายุ 68 ปี ปวดหลัง ปวดเข่า อ่อนเพลีย สิทธิเบิกตรงข้าราชการ",
     "ชื่อกานดา สุขใจ อายุ 58 ปี แน่นหน้าอก หายใจลำบาก เวียนหัวมาก สิทธิประกันสังคม",
   ];
 
-  function startListening() {
+  async function startListening() {
     setErrorMsg("");
+    audioChunksRef.current = [];
+
+    // 1. Start audio recording via MediaRecorder for ElevenLabs Scribe / Gemini STT
+    if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+        const mimeType =
+          typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+            ? "audio/webm;codecs=opus"
+            : "audio/webm";
+        const recorder = new MediaRecorder(stream, { mimeType });
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            audioChunksRef.current.push(e.data);
+          }
+        };
+        mediaRecorderRef.current = recorder;
+        recorder.start(250);
+      } catch (err) {
+        console.warn("MediaRecorder could not start:", err);
+      }
+    }
+
+    // 2. Start Web Speech Recognition for real-time live preview text
     const SpeechRecognition =
       typeof window !== "undefined" &&
       (window.SpeechRecognition || window.webkitSpeechRecognition);
 
-    if (!SpeechRecognition) {
-      setErrorMsg(
-        "เบราว์เซอร์นี้ไม่รองรับการรับเสียงพูดโดยตรง ท่านสามารถกดปุ่มตัวอย่างประโยคด้านล่าง หรือพิมพ์ข้อความแทนได้"
-      );
-      return;
+    if (SpeechRecognition) {
+      try {
+        const recognition = new SpeechRecognition();
+        recognition.lang = "th-TH";
+        recognition.continuous = false;
+        recognition.interimResults = true;
+
+        recognition.onstart = () => {
+          setIsListening(true);
+        };
+
+        recognition.onresult = (event) => {
+          let currentText = "";
+          for (let i = 0; i < event.results.length; i += 1) {
+            currentText += event.results[i][0].transcript;
+          }
+          setTranscript(currentText);
+        };
+
+        recognition.onerror = () => {
+          if (!mediaRecorderRef.current) {
+            setIsListening(false);
+            setErrorMsg("ไม่ได้ยินเสียงพูดชัดเจน กรุณาลองกดไมโครโฟนพูดอีกครั้ง หรือเลือกประโยคตัวอย่างด้านล่าง");
+          }
+        };
+
+        recognition.onend = () => {
+          // Keep recording active if MediaRecorder is running
+        };
+
+        setRecognitionInstance(recognition);
+        recognition.start();
+      } catch {
+        // Recognition start error fallback
+      }
     }
 
-    try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = "th-TH";
-      recognition.continuous = false;
-      recognition.interimResults = true;
-
-      recognition.onstart = () => {
-        setIsListening(true);
-      };
-
-      recognition.onresult = (event) => {
-        let currentText = "";
-        for (let i = 0; i < event.results.length; i += 1) {
-          currentText += event.results[i][0].transcript;
-        }
-        setTranscript(currentText);
-      };
-
-      recognition.onerror = () => {
-        setIsListening(false);
-        setErrorMsg("ไม่ได้ยินเสียงพูดชัดเจน กรุณาลองกดไมโครโฟนพูดอีกครั้ง หรือเลือกประโยคตัวอย่างด้านล่าง");
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      setRecognitionInstance(recognition);
-      recognition.start();
-    } catch {
-      setIsListening(false);
-      setErrorMsg("ไม่สามารถเปิดไมโครโฟนได้ กรุณาตรวจสอบสิทธิ์ไมโครโฟนของเบราว์เซอร์");
-    }
+    setIsListening(true);
   }
 
   function stopListening() {
@@ -1791,21 +1819,50 @@ function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
         // Ignore stop error
       }
     }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {
+        // Ignore stop error
+      }
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
     setIsListening(false);
   }
 
   async function handleProcessVoice() {
-    const clean = transcript.trim();
-    if (!clean) {
-      setErrorMsg("กรุณากดปุ่มไมโครโฟนเพื่อพูดแจ้งอาการ หรือเลือกประโยคตัวอย่างด้านล่าง");
-      return;
-    }
-
     stopListening();
     setProcessing(true);
     setErrorMsg("");
 
-    const parsedForm = parseVoicePatientTranscript(clean);
+    let finalText = transcript.trim();
+
+    // If audio was captured, attempt high-accuracy server STT (ElevenLabs / Gemini)
+    if (audioChunksRef.current.length > 0) {
+      try {
+        const audioBlob = new Blob(audioChunksRef.current, {
+          type: audioChunksRef.current[0]?.type || "audio/webm",
+        });
+        const serverTranscript = await transcribeSpeechAudio(audioBlob);
+        if (serverTranscript && serverTranscript.length > 2) {
+          finalText = serverTranscript;
+          setTranscript(serverTranscript);
+        }
+      } catch (sttErr) {
+        console.warn("Server STT error, falling back to local transcript:", sttErr);
+      }
+    }
+
+    if (!finalText) {
+      setProcessing(false);
+      setErrorMsg("กรุณากดปุ่มไมโครโฟนเพื่อพูดแจ้งอาการ หรือเลือกประโยคตัวอย่างด้านล่าง");
+      return;
+    }
+
+    const parsedForm = parseVoicePatientTranscript(finalText);
     const prompt = formatPatientPrompt(parsedForm);
     const aiResult = await callAI(prompt, parsedForm);
 

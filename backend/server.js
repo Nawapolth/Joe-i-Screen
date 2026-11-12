@@ -9,6 +9,7 @@ dotenv.config({ path: fileURLToPath(new URL("./.env", import.meta.url)) });
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY || process.env.VITE_ELEVENLABS_API_KEY;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_KEY || process.env.VITE_OPENROUTER_KEY;
 
@@ -18,7 +19,7 @@ app.use(
     credentials: true,
   }),
 );
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "15mb" }));
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -28,46 +29,114 @@ app.get("/health", (_req, res) => {
   });
 });
 
+async function callElevenLabsTTS(text, apiKey) {
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || "cgSgspJ2msm6clMCkdW9";
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "xi-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.85,
+      },
+    }),
+  });
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`ElevenLabs TTS error: ${response.status} ${errorBody}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+async function callTranslateFallbackTTS(text) {
+  const chunks = [];
+  const maxChunk = 150;
+  let remaining = text.trim();
+  while (remaining.length > 0) {
+    if (remaining.length <= maxChunk) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitIdx = remaining.lastIndexOf(" ", maxChunk);
+    if (splitIdx <= 30) splitIdx = remaining.lastIndexOf("ค่ะ", maxChunk);
+    if (splitIdx <= 30) splitIdx = maxChunk;
+    chunks.push(remaining.slice(0, splitIdx).trim());
+    remaining = remaining.slice(splitIdx).trim();
+  }
+
+  const buffers = [];
+  for (const chunk of chunks) {
+    if (!chunk) continue;
+    const encoded = encodeURIComponent(chunk);
+    const fallbackUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=th&client=tw-ob`;
+    const fRes = await fetch(fallbackUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        Referer: "https://translate.google.com/",
+      },
+    });
+    if (fRes.ok) {
+      const ab = await fRes.arrayBuffer();
+      buffers.push(Buffer.from(ab));
+    }
+  }
+  if (buffers.length === 0) throw new Error("Fallback TTS failed");
+  return Buffer.concat(buffers);
+}
+
 app.post("/api/tts", async (req, res) => {
   const text = (req.body?.text || "").trim();
   if (!text) {
     return res.status(400).json({ error: "Missing text." });
   }
 
-  const googleKey = process.env.GOOGLE_TTS_API_KEY || process.env.GOOGLE_CLOUD_API_KEY;
-
   try {
     let audioBuffer;
-    if (googleKey) {
-      const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleKey}`;
-      const gRes = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          input: { text },
-          voice: { languageCode: "th-TH", name: "th-TH-Neural2-C", ssmlGender: "FEMALE" },
-          audioConfig: { audioEncoding: "MP3", speakingRate: 0.95 },
-        }),
-      });
-      if (gRes.ok) {
-        const data = await gRes.json();
-        if (data.audioContent) {
-          audioBuffer = Buffer.from(data.audioContent, "base64");
-        }
+
+    // 1. Prioritize ElevenLabs Multilingual v2
+    if (ELEVENLABS_API_KEY) {
+      try {
+        audioBuffer = await callElevenLabsTTS(text, ELEVENLABS_API_KEY);
+      } catch (err) {
+        console.warn("Backend ElevenLabs TTS failed, attempting Google Cloud TTS:", err.message);
       }
     }
 
+    // 2. Google Cloud Neural2 TTS
+    const googleKey = process.env.GOOGLE_TTS_API_KEY || process.env.GOOGLE_CLOUD_API_KEY || GEMINI_API_KEY;
+    if (!audioBuffer && googleKey) {
+      try {
+        const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleKey}`;
+        const gRes = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            input: { text },
+            voice: { languageCode: "th-TH", name: "th-TH-Neural2-C", ssmlGender: "FEMALE" },
+            audioConfig: { audioEncoding: "MP3", speakingRate: 0.95 },
+          }),
+        });
+        if (gRes.ok) {
+          const data = await gRes.json();
+          if (data.audioContent) {
+            audioBuffer = Buffer.from(data.audioContent, "base64");
+          }
+        }
+      } catch (err) {
+        console.warn("Backend Google Cloud TTS failed:", err.message);
+      }
+    }
+
+    // 3. Resilient chunked fallback
     if (!audioBuffer) {
-      const encoded = encodeURIComponent(text.slice(0, 200));
-      const fallbackUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=th&client=tw-ob`;
-      const fRes = await fetch(fallbackUrl, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-          Referer: "https://translate.google.com/",
-        },
-      });
-      const ab = await fRes.arrayBuffer();
-      audioBuffer = Buffer.from(ab);
+      audioBuffer = await callTranslateFallbackTTS(text);
     }
 
     res.setHeader("Content-Type", "audio/mpeg");
@@ -75,6 +144,74 @@ app.post("/api/tts", async (req, res) => {
     return res.send(audioBuffer);
   } catch (error) {
     return res.status(500).json({ error: "TTS failed", details: error.message });
+  }
+});
+
+app.post("/api/stt", async (req, res) => {
+  const { audioBase64, mimeType } = req.body || {};
+  if (!audioBase64 || typeof audioBase64 !== "string") {
+    return res.status(400).json({ error: "Missing audioBase64 payload." });
+  }
+
+  try {
+    // 1. ElevenLabs Scribe STT
+    if (ELEVENLABS_API_KEY) {
+      try {
+        const buffer = Buffer.from(audioBase64, "base64");
+        const blob = new Blob([buffer], { type: mimeType || "audio/webm" });
+        const formData = new FormData();
+        formData.append("file", blob, "audio.webm");
+        formData.append("model_id", "scribe_v1");
+        formData.append("language_code", "tha");
+
+        const elRes = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+          method: "POST",
+          headers: { "xi-api-key": ELEVENLABS_API_KEY },
+          body: formData,
+        });
+
+        if (elRes.ok) {
+          const data = await elRes.json();
+          if (data.text) {
+            return res.json({ text: data.text });
+          }
+        }
+      } catch (err) {
+        console.warn("ElevenLabs STT error on backend, trying Gemini STT:", err.message);
+      }
+    }
+
+    // 2. Gemini STT
+    if (GEMINI_API_KEY) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+      const gRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { inlineData: { mimeType: mimeType || "audio/webm", data: audioBase64 } },
+                { text: "ถอดความเสียงพูดภาษาไทยของผู้ป่วยต่อไปนี้เป็นข้อความภาษาไทยอย่างถูกต้องแม่นยำ ไม่ต้องมีคำอธิบายเพิ่มเติม ตอบเฉพาะข้อความคำพูดที่ถอดความได้เท่านั้น" },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (gRes.ok) {
+        const data = await gRes.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) {
+          return res.json({ text: text.trim() });
+        }
+      }
+    }
+
+    return res.status(500).json({ error: "No active STT engine succeeded." });
+  } catch (err) {
+    return res.status(500).json({ error: "STT processing error", details: err.message });
   }
 });
 

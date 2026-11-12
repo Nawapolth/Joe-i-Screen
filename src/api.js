@@ -390,10 +390,20 @@ export function parseVoicePatientTranscript(rawTranscript = "") {
   // 1. Extract Age (เช่น "อายุ 72 ปี" หรือ "72 ปี")
   let age = "65";
   const ageMatch =
-    text.match(/อายุ\s*(\d{1,3})\s*(?:ปี|ขวบ)?/) ||
-    text.match(/(\d{2,3})\s*ปี/);
+    text.match(/อายุ\s*(\d{1,3})\s*(?:ปี|ขวบ)?/i) ||
+    text.match(/(\d{2,3})\s*(?:ปี|ขวบ)/i);
   if (ageMatch && ageMatch[1]) {
     age = ageMatch[1];
+  } else if (/หกสิบ/i.test(text)) {
+    age = "60";
+  } else if (/เจ็ดสิบ/i.test(text)) {
+    age = "70";
+  } else if (/แปดสิบ/i.test(text)) {
+    age = "80";
+  } else if (/ห้าสิบ/i.test(text)) {
+    age = "50";
+  } else if (/สี่สิบ/i.test(text)) {
+    age = "40";
   }
 
   // 2. Extract Gender
@@ -405,30 +415,32 @@ export function parseVoicePatientTranscript(rawTranscript = "") {
   }
 
   // 3. Extract Name (เช่น "ชื่อสมศรี ใจดี" หรือ "ชื่อนายสมชาย รักไทย")
+  // ป้องกันคำว่า "อายุ" หรือคำบอกอาการรั่วเข้ามาในชื่อผู้ป่วยอย่างเด็ดขาด
   let firstName = "ผู้รับบริการ";
-  let lastName = "(แจ้งด้วยเสียง)";
-  const nameMatch = text.match(
-    /(?:ชื่อ|ผม|ดิฉัน|ยาย|ลุง|ป้า|ตา|นาย|นางสาว|นาง)\s*([ก-๙]{2,20})(?:\s+([ก-๙]{2,20}))?/
-  );
-  if (nameMatch && nameMatch[1]) {
-    const cleanedFirst = nameMatch[1]
-      .replace(/^(ชื่อ|นาย|นางสาว|นาง|คุณ|ยาย|ลุง|ป้า|ตา)/, "")
-      .trim();
-    if (cleanedFirst.length >= 2 && !["อายุ", "ปวด", "เจ็บ", "เป็น", "มีไข้"].includes(cleanedFirst)) {
-      firstName = cleanedFirst;
-      const candidateLast = (nameMatch[2] || "").trim();
-      if (
-        candidateLast &&
-        !candidateLast.startsWith("อายุ") &&
-        !candidateLast.startsWith("ปวด") &&
-        !candidateLast.startsWith("มี") &&
-        !candidateLast.startsWith("เป็น") &&
-        !candidateLast.startsWith("สิทธิ")
-      ) {
-        lastName = candidateLast;
-      } else {
-        lastName = "";
-      }
+  let lastName = "";
+
+  let nameSegment = text;
+  if (/ชื่อ/i.test(nameSegment)) {
+    const afterName = nameSegment.split(/ชื่อ/)[1] || "";
+    nameSegment = afterName;
+  }
+
+  // ตัดคำว่า "อายุ" และคำบอกอาการหรือตัวเลขทิ้งทันที
+  nameSegment = nameSegment.split(/(?:อายุ|\d+\s*ปี|ปวด|เจ็บ|มีอาการ|มีไข้|เป็น|สิทธิ|สวัสดิการ|บัตรทอง|โรค|โทร)/i)[0].trim();
+
+  // ลบคำนำหน้าชื่อ
+  nameSegment = nameSegment.replace(/^(?:นาย|นางสาว|นาง|คุณ|ยาย|ลุง|ป้า|ตา|ปู่|ย่า|ผม|ดิฉัน)\s*/g, "").trim();
+
+  // ลบคำว่า "อายุ" ที่อาจติดท้ายชื่อมาแบบไม่มีวรรค (เช่น "สมศรีอายุ" -> "สมศรี")
+  nameSegment = nameSegment.replace(/อายุ.*$/, "").trim();
+
+  const nameParts = nameSegment.split(/\s+/).filter(Boolean);
+  const stopWords = ["อายุ", "เป็น", "ปวด", "เจ็บ", "มี", "ไม่", "มา", "ไข้", "ไอ"];
+
+  if (nameParts.length > 0 && nameParts[0].length >= 2 && !stopWords.includes(nameParts[0])) {
+    firstName = nameParts[0];
+    if (nameParts.length > 1 && !stopWords.includes(nameParts[1]) && !nameParts[1].startsWith("อายุ")) {
+      lastName = nameParts[1];
     }
   }
 
@@ -522,5 +534,48 @@ export function parseVoicePatientTranscript(rawTranscript = "") {
     benefitType,
     allergies,
   };
+}
+
+/**
+ * Transcribe recorded audio blob via /api/stt (ElevenLabs Scribe STT or Gemini Flash audio STT)
+ */
+export async function transcribeSpeechAudio(audioBlob) {
+  try {
+    const reader = new FileReader();
+    const base64Promise = new Promise((resolve, reject) => {
+      reader.onloadend = () => {
+        const res = reader.result;
+        const base64 = typeof res === "string" ? res.split(",")[1] : "";
+        resolve(base64);
+      };
+      reader.onerror = reject;
+    });
+    reader.readAsDataURL(audioBlob);
+    const audioBase64 = await base64Promise;
+
+    if (!audioBase64) return null;
+
+    const res = await fetch("/api/stt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        audioBase64,
+        mimeType: audioBlob.type || "audio/webm",
+      }),
+    });
+
+    if (!res.ok) {
+      console.warn("STT server returned status:", res.status);
+      return null;
+    }
+
+    const data = await res.json();
+    if (data && data.text && data.text.trim()) {
+      return data.text.trim();
+    }
+  } catch (err) {
+    console.warn("transcribeSpeechAudio error:", err);
+  }
+  return null;
 }
 

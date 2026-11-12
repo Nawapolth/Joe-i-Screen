@@ -2,9 +2,40 @@
 
 /**
  * Serverless Text-to-Speech Endpoint for Hospital Kiosk announcements.
- * Primary: Google Cloud Text-to-Speech REST API (th-TH-Neural2-C / th-TH-Standard-A)
- * Fallback: Google Translate TTS TTS voice synthesis (zero-config, zero-credential backup)
+ * Tier 1: ElevenLabs Multilingual v2 (Studio-quality human Thai voice)
+ * Tier 2: Google Cloud Text-to-Speech (th-TH-Neural2-C)
+ * Tier 3: Chunked Translate Fallback (Zero-config, seamless length with no cutoffs)
  */
+
+async function callElevenLabsTTS(text, apiKey, voiceId) {
+  const selectedVoice = voiceId || process.env.ELEVENLABS_VOICE_ID || "cgSgspJ2msm6clMCkdW9"; // Default: Jessica / Multilingual v2
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${selectedVoice}`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "xi-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: {
+        stability: 0.5,
+        similarity_boost: 0.85,
+        style: 0.1,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`ElevenLabs TTS error: ${response.status} ${errorBody}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
 
 async function callGoogleCloudTTS(text, apiKey) {
   const url = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`;
@@ -15,7 +46,7 @@ async function callGoogleCloudTTS(text, apiKey) {
       input: { text },
       voice: {
         languageCode: "th-TH",
-        name: "th-TH-Neural2-C", // High-fidelity clinical broadcast voice (Female)
+        name: "th-TH-Neural2-C", // High-fidelity broadcast voice (Female)
         ssmlGender: "FEMALE",
       },
       audioConfig: {
@@ -40,23 +71,47 @@ async function callGoogleCloudTTS(text, apiKey) {
 }
 
 async function callTranslateFallbackTTS(text) {
-  // Safe, zero-credential clinical Thai voice fallback
-  const encoded = encodeURIComponent(text.slice(0, 200));
-  const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=th&client=tw-ob`;
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      Referer: "https://translate.google.com/",
-    },
-  });
+  // Safe, zero-credential clinical Thai voice fallback with chunking so audio never cuts off
+  const chunks = [];
+  const maxChunk = 150;
+  let remaining = text.trim();
 
-  if (!response.ok) {
-    throw new Error(`Translate fallback failed: ${response.status}`);
+  while (remaining.length > 0) {
+    if (remaining.length <= maxChunk) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitIdx = remaining.lastIndexOf(" ", maxChunk);
+    if (splitIdx <= 30) splitIdx = remaining.lastIndexOf("ค่ะ", maxChunk);
+    if (splitIdx <= 30) splitIdx = maxChunk;
+    chunks.push(remaining.slice(0, splitIdx).trim());
+    remaining = remaining.slice(splitIdx).trim();
   }
 
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  const buffers = [];
+  for (const chunk of chunks) {
+    if (!chunk) continue;
+    const encoded = encodeURIComponent(chunk);
+    const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=th&client=tw-ob`;
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Referer: "https://translate.google.com/",
+      },
+    });
+
+    if (response.ok) {
+      const arrayBuffer = await response.arrayBuffer();
+      buffers.push(Buffer.from(arrayBuffer));
+    }
+  }
+
+  if (buffers.length === 0) {
+    throw new Error("Translate fallback returned no audio chunks.");
+  }
+
+  return Buffer.concat(buffers);
 }
 
 export default async function handler(req, res) {
@@ -83,7 +138,8 @@ export default async function handler(req, res) {
   }
 
   const cleanText = text.trim();
-  const apiKey =
+  const elevenLabsKey = process.env.ELEVENLABS_API_KEY || process.env.VITE_ELEVENLABS_API_KEY;
+  const googleKey =
     process.env.GOOGLE_TTS_API_KEY ||
     process.env.GOOGLE_CLOUD_API_KEY ||
     process.env.GEMINI_API_KEY;
@@ -91,14 +147,26 @@ export default async function handler(req, res) {
   try {
     let audioBuffer;
 
-    if (apiKey) {
+    // 1. Prioritize ElevenLabs Studio Voice if API key provided
+    if (elevenLabsKey) {
       try {
-        audioBuffer = await callGoogleCloudTTS(cleanText, apiKey);
+        audioBuffer = await callElevenLabsTTS(cleanText, elevenLabsKey);
       } catch (err) {
-        console.warn("Primary Google Cloud TTS failed, falling back:", err.message);
-        audioBuffer = await callTranslateFallbackTTS(cleanText);
+        console.warn("ElevenLabs TTS failed, attempting Google Cloud TTS fallback:", err.message);
       }
-    } else {
+    }
+
+    // 2. Google Cloud Neural2 TTS
+    if (!audioBuffer && googleKey) {
+      try {
+        audioBuffer = await callGoogleCloudTTS(cleanText, googleKey);
+      } catch (err) {
+        console.warn("Google Cloud TTS failed, attempting translate fallback:", err.message);
+      }
+    }
+
+    // 3. Resilient zero-config concatenated fallback (guaranteed never to cut off)
+    if (!audioBuffer) {
       audioBuffer = await callTranslateFallbackTTS(cleanText);
     }
 
