@@ -3,6 +3,11 @@ import { createClient } from "@supabase/supabase-js";
 import {
   Accessibility,
   Activity,
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  Bell,
+  CheckCircle2,
   ClipboardCheck,
   CreditCard,
   Database,
@@ -16,6 +21,7 @@ import {
   Printer,
   RotateCcw,
   Search,
+  ShieldCheck,
   Ticket,
   Type,
   Volume2,
@@ -448,7 +454,7 @@ export default function App() {
     setSmartCardData(payload);
     setShowSmartCardModal(false);
     setPage("intake");
-    showToast(`💳 อ่านบัตรประชาชนสำเร็จ: คุณ${profile.firstName} ${profile.lastName} (${profile.benefitType})`);
+    showToast(`อ่านบัตรประชาชนสำเร็จ: คุณ${profile.firstName} ${profile.lastName} (${profile.benefitType})`);
     speakThai(
       `อ่านข้อมูลบัตรประชาชนของ คุณ ${profile.firstName} ${profile.lastName} สิทธิ ${profile.benefitType} เรียบร้อยแล้ว กรุณาเลือกอาการที่มาพบแพทย์ค่ะ`,
       "intake-2"
@@ -473,7 +479,7 @@ export default function App() {
             setShowSmartCardModal(false);
             setPage("intake");
             showToast(
-              `💳 อ่านบัตรประชาชน USB สำเร็จ: คุณ${payload.firstName} ${payload.lastName} (${payload.benefitType})`
+              `อ่านบัตรประชาชน USB สำเร็จ: คุณ${payload.firstName} ${payload.lastName} (${payload.benefitType})`
             );
           }
         } catch {
@@ -1064,8 +1070,9 @@ export default function App() {
 
       {/* ─── SUBTLE CLINICAL DISCLAIMER & PDPA COMPLIANCE FOOTER ─── */}
       <footer className="no-print border-t border-slate-200 bg-white/80 py-3 px-4 text-center text-[11px] sm:text-xs text-slate-500 mt-8">
-        <span>
-          🛡️ มาตรฐานคุ้มครองข้อมูลส่วนบุคคลด้านสุขภาพ (PDPA) · ระบบนี้เป็นเครื่องมือช่วยคัดกรองเบื้องต้น (Clinical Decision Support) ไม่ใช่การวินิจฉัยโรคขั้นสุดท้าย
+        <span className="inline-flex items-center justify-center gap-1.5 flex-wrap">
+          <ShieldCheck className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+          <span>มาตรฐานคุ้มครองข้อมูลส่วนบุคคลด้านสุขภาพ (PDPA) · ระบบนี้เป็นเครื่องมือช่วยคัดกรองเบื้องต้น (Clinical Decision Support) ไม่ใช่การวินิจฉัยโรคขั้นสุดท้าย</span>
         </span>
       </footer>
 
@@ -1350,7 +1357,7 @@ function PatientHomePage({
             <div className="relative">
               {(activeHighlightSection === "header" || activeHighlightSection === "home-header") && (
                 <div className="absolute top-full mt-2.5 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-                  <span className="text-lg">☝️</span>
+                  <ArrowUp className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
                   <span>กดปุ่มนี้เพื่อฟังเสียงอ่านแนะนำ</span>
                 </div>
               )}
@@ -1373,7 +1380,7 @@ function PatientHomePage({
                 ) : (
                   <>
                     <Volume2 className="w-7 h-7 text-slate-950 shrink-0" />
-                    <span>🔊 ฟังเสียงแนะนำ (กดฟัง)</span>
+                    <span>ฟังเสียงแนะนำ (กดฟัง)</span>
                   </>
                 )}
               </button>
@@ -1383,7 +1390,7 @@ function PatientHomePage({
           <div className="relative">
             {(activeHighlightSection === "sos" || activeHighlightSection === "home-sos") && (
               <div className="absolute top-full mt-2.5 left-1/2 -translate-x-1/2 bg-red-700 text-white border-2 border-white text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-                <span className="text-lg">☝️</span>
+                <ArrowUp className="w-4 h-4 text-white shrink-0 stroke-[3]" />
                 <span>กดปุ่มนี้เมื่อฉุกเฉินวิกฤต</span>
               </div>
             )}
@@ -1396,7 +1403,7 @@ function PatientHomePage({
                   : "border-red-800 bg-red-600 hover:bg-red-700"
               }`}
             >
-              <span className="text-lg">🚨</span>
+              <Bell className="w-5 h-5 text-white shrink-0 animate-pulse" />
               <span>SOS เรียกพยาบาลด่วน</span>
             </button>
           </div>
@@ -1442,7 +1449,7 @@ function PatientHomePage({
             >
               {(activeHighlightSection === "voice" || activeHighlightSection === "home-voice") && (
                 <div className="absolute -top-12 left-4 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
-                  <span className="text-lg">👇</span>
+                  <ArrowDown className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
                   <span>ผู้สูงอายุกดปุ่มไมค์นี้เพื่อพูดแจ้งอาการ</span>
                 </div>
               )}
@@ -1485,7 +1492,7 @@ function PatientHomePage({
                 className="w-full inline-flex items-center justify-center gap-2.5 rounded-lg border-2 border-slate-900 bg-white py-3 px-4 text-sm sm:text-base font-bold text-slate-900 hover:bg-slate-100 transition-all shadow-sm"
               >
                 <CreditCard className="w-5 h-5 text-slate-900 shrink-0" />
-                <span>💳 เสียบบัตรประชาชน (Smart Card)</span>
+                <span>เสียบบัตรประชาชน (Smart Card)</span>
                 {bridgeConnected && (
                   <span className="ml-1 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-800 border border-emerald-300">
                     เชื่อมต่อเครื่องอ่านแล้ว
@@ -1497,7 +1504,7 @@ function PatientHomePage({
             <div className="relative">
               {(activeHighlightSection === "form" || activeHighlightSection === "home-form") && (
                 <div className="absolute -top-12 left-4 bg-slate-900 text-white border-2 border-amber-400 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
-                  <span className="text-lg">👇</span>
+                  <ArrowDown className="w-4 h-4 text-amber-400 shrink-0 stroke-[3]" />
                   <span>กดปุ่มนี้หากต้องการพิมพ์แบบประเมินเอง</span>
                 </div>
               )}
@@ -1632,10 +1639,13 @@ function SmartCardModal({ onClose, onSelectCard, bridgeConnected }) {
               <h3 className="text-base sm:text-lg font-bold text-slate-900">
                 อ่านบัตรประจำตัวประชาชน (Smart Card)
               </h3>
-              <div className="text-[11px] font-medium text-slate-500">
-                {bridgeConnected
-                  ? "🟢 เชื่อมต่อเครื่องอ่านบัตร USB แล้ว — เสียบบัตรจริงได้ทันที"
-                  : "⚪ โหมดพร้อมใช้งาน — รองรับเครื่องอ่าน USB หรือเลือกบัตรจำลองด้านล่าง"}
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-500 mt-0.5">
+                <span className={`w-2 h-2 rounded-full ${bridgeConnected ? "bg-emerald-500 animate-pulse" : "bg-slate-400"}`} />
+                <span>
+                  {bridgeConnected
+                    ? "เชื่อมต่อเครื่องอ่านบัตร USB แล้ว — พร้อมเสียบบัตร"
+                    : "โหมดพร้อมใช้งาน — รองรับเครื่องอ่าน USB หรือเลือกบัตรจำลองด้านล่าง"}
+                </span>
               </div>
             </div>
           </div>
@@ -1668,8 +1678,8 @@ function SmartCardModal({ onClose, onSelectCard, bridgeConnected }) {
                 }`}
               >
                 <div className="flex items-center justify-between gap-2 mb-1">
-                  <span className="text-xs font-extrabold text-slate-900">
-                    💳 {profile.label}
+                  <span className="text-xs font-bold text-slate-900">
+                    {profile.label}
                   </span>
                   <span className="rounded bg-slate-900 px-2 py-0.5 text-[11px] font-bold text-white">
                     {isReading ? "กำลังอ่านชิป..." : "กดเพื่อดึงข้อมูล"}
@@ -1678,11 +1688,14 @@ function SmartCardModal({ onClose, onSelectCard, bridgeConnected }) {
                 <div className="text-xs text-slate-700 font-semibold">
                   ชื่อ: คุณ{profile.firstName} {profile.lastName} ({profile.gender}, อายุ {profile.age} ปี)
                 </div>
-                <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap gap-x-3">
+                <div className="text-[11px] text-slate-500 mt-0.5 flex flex-wrap gap-x-3 items-center">
                   <span>เลขบัตร: {profile.citizenId}</span>
                   <span>สิทธิ: {profile.benefitType}</span>
                   {profile.allergies && profile.allergies !== "ไม่มี" && (
-                    <span className="font-bold text-red-600">⚠️ แพ้ยา: {profile.allergies}</span>
+                    <span className="inline-flex items-center gap-1 font-bold text-red-700 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded text-[10px]">
+                      <AlertTriangle className="w-3 h-3 text-red-600" />
+                      <span>แพ้ยา: {profile.allergies}</span>
+                    </span>
                   )}
                 </div>
               </button>
@@ -1691,7 +1704,10 @@ function SmartCardModal({ onClose, onSelectCard, bridgeConnected }) {
         </div>
 
         <div className="flex items-center justify-between pt-3 border-t border-slate-200 text-[11px] text-slate-500">
-          <span>🔒 ข้อมูลถูกเข้ารหัสตามมาตรฐาน PDPA</span>
+          <span className="inline-flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5 text-slate-400" />
+            <span>ข้อมูลถูกเข้ารหัสตามมาตรฐาน PDPA</span>
+          </span>
           <button
             type="button"
             onClick={onClose}
@@ -1981,11 +1997,11 @@ function PatientTicketPage({
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
 
   const satisfactionOptions = [
-    { score: 1, emoji: "😡", label: "ไม่พอใจมาก", color: "hover:border-red-500 hover:bg-red-50 text-red-600" },
-    { score: 2, emoji: "🙁", label: "ไม่พอใจ", color: "hover:border-orange-500 hover:bg-orange-50 text-orange-600" },
-    { score: 3, emoji: "😐", label: "ปานกลาง", color: "hover:border-amber-500 hover:bg-amber-50 text-amber-600" },
-    { score: 4, emoji: "🙂", label: "พอใจ", color: "hover:border-emerald-500 hover:bg-emerald-50 text-emerald-600" },
-    { score: 5, emoji: "😄", label: "พอใจมาก", color: "hover:border-green-600 hover:bg-green-50 text-green-600" },
+    { score: 1, label: "ไม่พอใจมาก", color: "hover:border-red-500 hover:bg-red-50 text-red-700 border-slate-200" },
+    { score: 2, label: "ไม่พอใจ", color: "hover:border-orange-500 hover:bg-orange-50 text-orange-700 border-slate-200" },
+    { score: 3, label: "ปานกลาง", color: "hover:border-amber-500 hover:bg-amber-50 text-amber-700 border-slate-200" },
+    { score: 4, label: "พอใจ", color: "hover:border-emerald-500 hover:bg-emerald-50 text-emerald-700 border-slate-200" },
+    { score: 5, label: "พอใจมาก", color: "hover:border-green-600 hover:bg-green-50 text-green-700 border-slate-200" },
   ];
 
   function handleRate(score) {
@@ -2088,7 +2104,7 @@ function PatientTicketPage({
             onClick={onTriggerSOS}
             className="inline-flex items-center gap-1.5 rounded-md border border-red-700 bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 transition-colors shrink-0"
           >
-            <span>🚨</span>
+            <Bell className="w-3.5 h-3.5 text-white shrink-0 animate-pulse" />
             <span>SOS เรียกพยาบาลฉุกเฉิน</span>
           </button>
         </div>
@@ -2114,7 +2130,7 @@ function PatientTicketPage({
               ) : (
                 <>
                   <Volume2 className="w-5 h-5 text-slate-950 shrink-0" />
-                  <span>🔊 อ่านบัตรคิวให้ฟัง</span>
+                  <span>อ่านบัตรคิวให้ฟัง</span>
                 </>
               )}
             </button>
@@ -2123,7 +2139,7 @@ function PatientTicketPage({
           <div className="relative">
             {activeHighlightSection === "ticket-print" && (
               <div className="absolute top-full mt-2.5 right-0 sm:left-1/2 sm:-translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-                <span className="text-lg">☝️</span>
+                <ArrowUp className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
                 <span>กดปุ่มนี้เพื่อพิมพ์สลิปบัตรคิว</span>
               </div>
             )}
@@ -2167,7 +2183,7 @@ function PatientTicketPage({
         >
           {activeHighlightSection === "ticket-queue" && (
             <div className="no-print absolute -top-11 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-              <span className="text-lg">👇</span>
+              <ArrowDown className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
               <span>หมายเลขคิวรับบริการของคุณ</span>
             </div>
           )}
@@ -2190,7 +2206,7 @@ function PatientTicketPage({
         >
           {activeHighlightSection === "ticket-dept" && (
             <div className="no-print absolute -top-11 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-              <span className="text-lg">👇</span>
+              <ArrowDown className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
               <span>แผนกตรวจและเวลาเข้าพบแพทย์</span>
             </div>
           )}
@@ -2226,7 +2242,7 @@ function PatientTicketPage({
           </div>
           {hasAllergy && (
             <div className="flex justify-between pt-0.5 text-red-700 font-bold">
-              <span>⚠️ ประวัติแพ้ยา:</span>
+              <span>ประวัติแพ้ยา (สำคัญ):</span>
               <span>{ticket.allergies}</span>
             </div>
           )}
@@ -2277,8 +2293,8 @@ function PatientTicketPage({
         >
           {activeHighlightSection === "ticket-rating" && (
             <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap animate-bounce flex items-center gap-1.5 z-30">
-              <span className="text-lg">👇</span>
-              <span>กดรูปหน้ายิ้มเพื่อประเมินความพึงพอใจการบริการ</span>
+              <ArrowDown className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
+              <span>กดเลือกระดับความพึงพอใจการบริการ</span>
             </div>
           )}
           <div className="text-xs sm:text-sm font-bold text-slate-900 mb-1">
@@ -2290,7 +2306,7 @@ function PatientTicketPage({
 
           {ratingSubmitted ? (
             <div className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs sm:text-sm font-semibold text-emerald-800">
-              <span>✓</span>
+              <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
               <span>ขอบพระคุณสำหรับข้อเสนอแนะในการรับบริการ (คะแนน: {rating}/5)</span>
             </div>
           ) : (
@@ -2300,10 +2316,10 @@ function PatientTicketPage({
                   key={opt.score}
                   type="button"
                   onClick={() => handleRate(opt.score)}
-                  className={`flex flex-col items-center justify-center p-2 sm:p-2.5 rounded-md border border-slate-200 bg-slate-50 transition-all transform active:scale-95 ${opt.color}`}
+                  className={`flex flex-col items-center justify-center p-2 sm:p-2.5 rounded-md border bg-slate-50 transition-all transform active:scale-95 ${opt.color}`}
                 >
-                  <span className="text-2xl sm:text-3xl leading-none mb-1 select-none">
-                    {opt.emoji}
+                  <span className="w-8 h-8 rounded-full bg-white border border-slate-300 flex items-center justify-center text-sm font-extrabold text-slate-900 mb-1.5 shadow-sm">
+                    {opt.score}
                   </span>
                   <span className="text-[10px] sm:text-xs font-semibold text-slate-700 leading-tight">
                     {opt.label}
@@ -2622,7 +2638,7 @@ function StaffDashboardHome({ setPage, patients, dbStatus, onInspectPatient, onD
             onClick={onTriggerSOS}
             className="inline-flex items-center gap-1.5 rounded-md border border-red-700 bg-red-600 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white hover:bg-red-700 transition-colors"
           >
-            <span>🚨</span>
+            <Bell className="w-4 h-4 text-white shrink-0 animate-pulse" />
             <span>SOS เรียกพยาบาล</span>
           </button>
         </div>
@@ -2949,11 +2965,11 @@ function RecentPatientsTable({
                             color: "#FFFFFF",
                             fontSize: "0.7rem",
                             fontWeight: 700,
-                            padding: "1px 6px",
+                            padding: "2px 7px",
                             borderRadius: "4px",
                           }}
                         >
-                          ⚠️ แพ้ยา: {patient.allergies}
+                          แพ้ยา: {patient.allergies}
                         </span>
                       )}
                     </div>
@@ -3215,13 +3231,13 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
     const pulse = parseInt(form.pulse, 10);
     const temp = parseFloat(form.temp);
     if (!Number.isNaN(sys) && (sys >= 180 || (sys > 0 && sys < 90))) {
-      return `⚠️ ความดันโลหิตอยู่ในเกณฑ์เฝ้าระวัง (${form.bp} mmHg) — แนะนำแจ้งพยาบาลจุดคัดกรองทันที`;
+      return `ความดันโลหิตอยู่ในเกณฑ์เฝ้าระวัง (${form.bp} mmHg) — แนะนำแจ้งพยาบาลจุดคัดกรองทันที`;
     }
     if (!Number.isNaN(pulse) && (pulse > 120 || (pulse > 0 && pulse < 50))) {
-      return `⚠️ อัตราชีพจรผิดปกติ (${pulse} ครั้ง/นาที) — แนะนำแจ้งพยาบาลจุดคัดกรอง`;
+      return `อัตราชีพจรผิดปกติ (${pulse} ครั้ง/นาที) — แนะนำแจ้งพยาบาลจุดคัดกรอง`;
     }
     if (!Number.isNaN(temp) && temp >= 38.5) {
-      return `⚠️ ตรวจพบไข้สูง (${temp} °C) — ระบบบันทึกข้อมูลเฝ้าระวังในใบคัดกรอง`;
+      return `ตรวจพบไข้สูง (${temp} °C) — ระบบบันทึกข้อมูลเฝ้าระวังในใบคัดกรอง`;
     }
     return null;
   })();
@@ -3283,7 +3299,7 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
               ) : (
                 <>
                   <Volume2 className="w-5 h-5 text-slate-950 shrink-0" />
-                  <span>🔊 ฟังคำแนะนำขั้นตอนที่ {step + 1}</span>
+                  <span>ฟังคำแนะนำขั้นตอนที่ {step + 1}</span>
                 </>
               )}
             </button>
@@ -3306,7 +3322,7 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
           <div className="relative">
             {activeHighlightSection === "intake-fields" && (
               <div className="absolute -top-10 left-4 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl flex items-center gap-1.5 animate-bounce z-20">
-                <span className="text-lg">👇</span>
+                <ArrowDown className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
                 <span>
                   {step === 0 && "กรุณากรอกข้อมูลส่วนตัวและสิทธิการรักษา"}
                   {step === 1 && "กรอกสัญญาณชีพ หรือกดข้ามได้หากไม่ได้วัด"}
@@ -3327,8 +3343,9 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
             <>
               {onOpenSmartCard && (
                 <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50/70 px-3.5 py-2.5">
-                  <div className="text-xs sm:text-sm font-semibold text-slate-800">
-                    💳 มีบัตรประชาชนหรือไม่? สามารถเสียบบัตรเพื่อดึงชื่อ อายุ และสิทธิรักษาอัตโนมัติ
+                  <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-slate-800">
+                    <CreditCard className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>มีบัตรประชาชนหรือไม่? สามารถเสียบบัตรเพื่อดึงชื่อ อายุ และสิทธิรักษาอัตโนมัติ</span>
                   </div>
                   <button
                     type="button"
@@ -3384,8 +3401,9 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
                 ข้อมูลสุขภาพและสัญญาณชีพเบื้องต้น (หากท่านไม่ได้วัดไว้ สามารถกด &ldquo;ถัดไป&rdquo; เพื่อข้ามขั้นตอนนี้ได้)
               </div>
               {vitalAlert && (
-                <div className="mb-4 rounded-lg border border-red-300 bg-red-50 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-red-800">
-                  {vitalAlert}
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-300 bg-red-50 px-3.5 py-2.5 text-xs sm:text-sm font-bold text-red-800">
+                  <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{vitalAlert}</span>
                 </div>
               )}
               <div className="vitals-grid">
@@ -3414,8 +3432,9 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
             <>
               {smartCardData?.firstName && (
                 <div className="mb-4 flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50/80 px-3.5 py-2 text-xs sm:text-sm text-emerald-900">
-                  <span>
-                    ✓ ดึงข้อมูลบัตรประชาชนสำเร็จ: <strong>{form.firstName} {form.lastName}</strong> ({form.age} ปี · {form.benefitType || "ตรวจสอบสิทธิ์แล้ว"})
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
+                    <span>ดึงข้อมูลบัตรประชาชนสำเร็จ: <strong>{form.firstName} {form.lastName}</strong> ({form.age} ปี · {form.benefitType || "ตรวจสอบสิทธิ์แล้ว"})</span>
                   </span>
                   <button
                     type="button"
@@ -3487,7 +3506,7 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
                   }}
                   onClick={analyzeSymptoms}
                 >
-                  ✦ วิเคราะห์อาการและแนะนำแผนกด้วย AI
+                  วิเคราะห์อาการและแนะนำแผนกด้วย AI
                 </button>
               )}
               {aiLoading && (
@@ -3558,7 +3577,7 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
               <div className="relative inline-block">
                 {activeHighlightSection === "intake-next" && (
                   <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-amber-400 text-slate-950 border-2 border-slate-950 text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap flex items-center gap-1.5 animate-bounce z-20">
-                    <span className="text-lg">👇</span>
+                    <ArrowDown className="w-4 h-4 text-slate-950 shrink-0 stroke-[3]" />
                     <span>กรอกเรียบร้อยแล้ว กดปุ่มถัดไปตรงนี้</span>
                   </div>
                 )}
@@ -3579,7 +3598,7 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
               <div className="relative inline-block">
                 {activeHighlightSection === "intake-submit" && (
                   <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-emerald-600 text-white border-2 border-white text-sm sm:text-base font-extrabold px-3.5 py-1.5 rounded-lg shadow-xl whitespace-nowrap flex items-center gap-1.5 animate-bounce z-20">
-                    <span className="text-lg">👇</span>
+                    <ArrowDown className="w-4 h-4 text-white shrink-0 stroke-[3]" />
                     <span>กดปุ่มสีเขียวนี้เพื่อรับบัตรคิวทันที</span>
                   </div>
                 )}
@@ -3592,7 +3611,7 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
                   disabled={saving}
                   onClick={submit}
                 >
-                  {saving ? "กำลังออกบัตรคิว..." : "✓ ยืนยันข้อมูลและรับบัตรคิว"}
+                  {saving ? "กำลังออกบัตรคิว..." : "ยืนยันข้อมูลและรับบัตรคิว"}
                 </button>
               </div>
             )}
@@ -3663,7 +3682,7 @@ function PatientRow({ p, selected, onSelect, onDelete }) {
             <span>{p.firstName} {p.lastName}</span>
             {p.allergies && p.allergies !== "ไม่มี" && p.allergies !== "-" && (
               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-300">
-                ⚠️ แพ้ยา: {p.allergies}
+                แพ้ยา: {p.allergies}
               </span>
             )}
           </div>
@@ -3690,7 +3709,7 @@ function PatientRow({ p, selected, onSelect, onDelete }) {
                 style={{ fontSize: 12, padding: "4px 10px", color: "#64748B", borderColor: "#CBD5E1" }}
                 onClick={() => { if (window.confirm(`ลบข้อมูล ${p.firstName}?`)) onDelete(p.dbId || p.id); }}
               >
-                ✕ ลบข้อมูล
+                ลบข้อมูล
               </button>
             </div>
             <div className="detail-grid">
