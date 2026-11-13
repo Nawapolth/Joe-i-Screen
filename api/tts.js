@@ -146,11 +146,13 @@ export default async function handler(req, res) {
 
   try {
     let audioBuffer;
+    let provider = "translate-fallback";
 
     // 1. Prioritize ElevenLabs Studio Voice if API key provided
     if (elevenLabsKey) {
       try {
         audioBuffer = await callElevenLabsTTS(cleanText, elevenLabsKey);
+        provider = "elevenlabs";
       } catch (err) {
         console.warn("ElevenLabs TTS failed, attempting Google Cloud TTS fallback:", err.message);
       }
@@ -160,6 +162,7 @@ export default async function handler(req, res) {
     if (!audioBuffer && googleKey) {
       try {
         audioBuffer = await callGoogleCloudTTS(cleanText, googleKey);
+        provider = "google-cloud";
       } catch (err) {
         console.warn("Google Cloud TTS failed, attempting translate fallback:", err.message);
       }
@@ -168,10 +171,12 @@ export default async function handler(req, res) {
     // 3. Resilient zero-config concatenated fallback (guaranteed never to cut off)
     if (!audioBuffer) {
       audioBuffer = await callTranslateFallbackTTS(cleanText);
+      provider = "translate-fallback";
     }
 
     res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400");
+    res.setHeader("X-TTS-Provider", provider);
+    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     return res.status(200).send(audioBuffer);
   } catch (error) {
     console.error("TTS endpoint error:", error);

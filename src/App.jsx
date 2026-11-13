@@ -615,7 +615,29 @@ export default function App() {
       cleanupKaraoke = startKaraokeIndicator(mode);
     }
 
-    // 1. Primary: Hospital Cloud TTS MP3 Audio (Google Cloud Neural2 / Fallback)
+    const playAudioBlob = async (blob) => {
+      const audioUrl = URL.createObjectURL(blob);
+      const audio = new Audio(audioUrl);
+
+      const finishAudio = () => {
+        setIsSpeaking(false);
+        setCurrentAudio(null);
+        setActiveHighlightSection(null);
+        if (cleanupKaraoke) cleanupKaraoke();
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      audio.onended = finishAudio;
+      audio.onerror = finishAudio;
+
+      setCurrentAudio(audio);
+      await audio.play();
+    };
+
+    const clientElevenKey = import.meta.env.VITE_ELEVENLABS_API_KEY;
+    const clientVoiceId = import.meta.env.VITE_ELEVENLABS_VOICE_ID || "cgSgspJ2msm6clMCkdW9";
+
+    // 1. Primary: Hospital Cloud TTS MP3 Audio (ElevenLabs / Google Cloud Neural2 / Fallback)
     try {
       setIsSpeaking(true);
       const res = await fetch("/api/tts", {
@@ -625,32 +647,42 @@ export default function App() {
       });
 
       if (res.ok) {
-        const blob = await res.blob();
-        const audioUrl = URL.createObjectURL(blob);
-        const audio = new Audio(audioUrl);
-
-        audio.onended = () => {
-          setIsSpeaking(false);
-          setCurrentAudio(null);
-          setActiveHighlightSection(null);
-          if (cleanupKaraoke) cleanupKaraoke();
-          URL.revokeObjectURL(audioUrl);
-        };
-
-        audio.onerror = () => {
-          setIsSpeaking(false);
-          setCurrentAudio(null);
-          setActiveHighlightSection(null);
-          if (cleanupKaraoke) cleanupKaraoke();
-          URL.revokeObjectURL(audioUrl);
-        };
-
-        setCurrentAudio(audio);
-        await audio.play();
-        return;
+        const provider = res.headers.get("X-TTS-Provider");
+        // If server fell back to translate-fallback but client has ElevenLabs key, prefer ElevenLabs
+        if (provider !== "translate-fallback" || !clientElevenKey) {
+          const blob = await res.blob();
+          await playAudioBlob(blob);
+          return;
+        }
       }
     } catch (e) {
-      console.warn("Cloud TTS playback failed, attempting browser fallback:", e);
+      console.warn("Cloud TTS playback failed, attempting direct ElevenLabs/browser fallback:", e);
+    }
+
+    // 1.5 Direct Client ElevenLabs Fallback (for local Vite dev without backend server, or if server lacked key)
+    if (clientElevenKey) {
+      try {
+        setIsSpeaking(true);
+        const elRes = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${clientVoiceId}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "xi-api-key": clientElevenKey,
+          },
+          body: JSON.stringify({
+            text,
+            model_id: "eleven_multilingual_v2",
+            voice_settings: { stability: 0.5, similarity_boost: 0.85, style: 0.1 },
+          }),
+        });
+        if (elRes.ok) {
+          const blob = await elRes.blob();
+          await playAudioBlob(blob);
+          return;
+        }
+      } catch (elErr) {
+        console.warn("Direct ElevenLabs TTS failed:", elErr);
+      }
     }
 
     // 2. Secondary: Browser SpeechSynthesis fallback
