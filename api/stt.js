@@ -32,7 +32,7 @@ async function callElevenLabsSTT(audioBuffer, mimeType, apiKey) {
 }
 
 async function callGeminiSTT(audioBase64, mimeType, apiKey) {
-  const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  const models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemini-2.5-flash"];
   let lastError = null;
 
   for (const model of models) {

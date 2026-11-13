@@ -234,13 +234,13 @@ function cleanAndParseJson(text) {
 }
 
 export async function callGoogleGeminiDirect(prompt, apiKey) {
-  const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  const models = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-flash-latest", "gemini-2.5-flash"];
   let lastError = null;
 
   for (const model of models) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(url, {
@@ -286,7 +286,7 @@ export async function callGoogleGeminiDirect(prompt, apiKey) {
         if (rawText) {
           const parsed = cleanAndParseJson(rawText);
           if (parsed && (parsed.risk_level || parsed.mode)) {
-            return parsed;
+            return { ...parsed, _ai_provider: `Google Gemini API (${model})` };
           }
         }
       } else {
@@ -371,7 +371,7 @@ export async function callScreeningAPI(prompt, patientForm = {}) {
         const content = data?.choices?.[0]?.message?.content;
         const parsed = cleanAndParseJson(content);
         if (parsed && (parsed.risk_level || parsed.mode)) {
-          return parsed;
+          return { ...parsed, _ai_provider: "OpenRouter (Gemini 2.5 Flash)" };
         }
       }
     } catch {
@@ -380,7 +380,7 @@ export async function callScreeningAPI(prompt, patientForm = {}) {
   }
 
   // 3. Fallback: Instant Medical Rule-Based Triage Engine (100% reliable, zero downtime)
-  return generateClinicalTriage(patientForm);
+  return { ...generateClinicalTriage(patientForm), _ai_provider: "Clinical Rule Engine (Offline)" };
 }
 
 // ─── VOICE-TO-QUEUE NATURAL LANGUAGE EXTRACTOR (THAI SPEECH PARSER) ───────────

@@ -349,6 +349,7 @@ async function callAI(prompt, formData = {}) {
         summary: response.summary || "ประเมินอาการเบื้องต้นตามเกณฑ์การคัดกรองของโรงพยาบาล",
         urgency_score: response.urgency_score ?? "4/10",
         next_steps: Array.isArray(response.next_steps) ? response.next_steps : [],
+        _ai_provider: response._ai_provider || "Clinical AI",
       };
     }
 
@@ -387,8 +388,20 @@ function parseAIResult(raw) {
     urgency_score: obj.urgency_score ?? obj.urgencyScore ?? null,
     next_steps: Array.isArray(obj.next_steps) ? obj.next_steps : (Array.isArray(obj.nextSteps) ? obj.nextSteps : (obj.next_steps ? [obj.next_steps] : [])),
     questions: Array.isArray(obj.questions) ? obj.questions : [],
+    _ai_provider: obj._ai_provider || null,
     raw: obj,
   };
+}
+
+function isEmergencyTriage(patient = {}, aiResult = null) {
+  const ai = aiResult || parseAIResult(patient?.aiAnalysis ?? patient?.ai_result);
+  const specialty = String(ai?.recommended_specialty || patient?.department || "");
+  return Boolean(
+    patient?.severity === "high" ||
+      ai?.risk_level === "ฉุกเฉิน" ||
+      specialty.includes("ห้องฉุกเฉิน") ||
+      specialty.includes("ER")
+  );
 }
 
 const DEFAULT_A11Y = {
@@ -409,7 +422,10 @@ function getPageSpeechSummary(pageName, ticket) {
     if (!ticket) {
       return "หน้าบัตรคิวของฉัน ขณะนี้ยังไม่มีบัตรคิวที่เปิดดู ท่านสามารถค้นหาบัตรคิวด้วยชื่อ เบอร์โทรศัพท์ หรือรหัสผู้ป่วย หรือกดเริ่มทำแบบประเมินอาการใหม่";
     }
-    const urgencyText = ticket.severity === "high" ? "เคสความเสี่ยงสูง เร่งด่วน กรุณาติดต่อเคาน์เตอร์พยาบาลฉุกเฉินทันที" : ticket.severity === "mid" ? "ความเสี่ยงปานกลาง" : "ทั่วไป ตามลำดับคิว";
+    if (isEmergencyTriage(ticket)) {
+      return `แจ้งเตือนภาวะฉุกเฉินค่ะ คุณ ${ticket.firstName} ${ticket.lastName} ระบบคัดกรองพบอาการเสี่ยงสูง และได้ส่งสัญญาณแจ้งทีมแพทย์และพยาบาลห้องฉุกเฉินแล้ว ท่านไม่ต้องพิมพ์บัตรคิวค่ะ บุคลากรห้องฉุกเฉินกำลังเดินทางมาพบท่าน กรุณาหาที่นั่งพักบริเวณจุดคัดกรองและรอเจ้าหน้าที่สักครู่นะคะ`;
+    }
+    const urgencyText = ticket.severity === "mid" ? "ความเสี่ยงปานกลาง" : "ทั่วไป ตามลำดับคิว";
     return `บัตรคิวอิเล็กทรอนิกส์ของ คุณ ${ticket.firstName} ${ticket.lastName} หมายเลขคิวของคุณคือ ${ticket.queueNumber} แผนกที่แนะนำคือ แผนก${ticket.department || "อายุรกรรม"} ระดับความเร่งด่วน ${urgencyText}`;
   }
   return "ระบบจัดการคิวและคัดกรองผู้ป่วย โจ ไอเมด สำหรับเจ้าหน้าที่";
@@ -449,6 +465,147 @@ export default function App() {
   const [smartCardData, setSmartCardData] = useState(null);
   const [showSmartCardModal, setShowSmartCardModal] = useState(false);
   const [bridgeConnected, setBridgeConnected] = useState(false);
+
+  const [emergencyAlerts, setEmergencyAlerts] = useState(() => {
+    try {
+      const saved = localStorage.getItem("joe_imed_emergency_alerts");
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const alertChannelRef = useRef(null);
+
+  function persistAndBroadcastAlerts(nextAlerts) {
+    try {
+      localStorage.setItem("joe_imed_emergency_alerts", JSON.stringify(nextAlerts));
+    } catch {
+      // Ignore storage limits
+    }
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        const bc = new BroadcastChannel("joe_imed_alerts");
+        bc.postMessage({ type: "SYNC_ALERTS", alerts: nextAlerts });
+        bc.close();
+      }
+    } catch {
+      // Ignore BroadcastChannel errors
+    }
+    try {
+      if (alertChannelRef.current) {
+        alertChannelRef.current.send({
+          type: "broadcast",
+          event: "sync_alerts",
+          payload: { alerts: nextAlerts },
+        });
+      }
+    } catch {
+      // Ignore Realtime broadcast errors
+    }
+  }
+
+  function triggerEmergencyDispatch({ type = "SOS_BUTTON", sourcePage = "kiosk", patient = null, customMessage = "" } = {}) {
+    const ai = parseAIResult(patient?.aiAnalysis);
+    const alertObj = {
+      id: `ALERT-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      type,
+      title:
+        type === "SOS_BUTTON"
+          ? "สัญญาณฉุกเฉิน SOS เรียกพยาบาลด่วน"
+          : `เคสฉุกเฉินวิกฤตจาก AI (${patient?.queueNumber || "ER-STAT"})`,
+      patientName: patient
+        ? `${patient.firstName || ""} ${patient.lastName || ""}`.trim() || "ผู้ป่วยฉุกเฉิน"
+        : "ผู้รับบริการบริเวณตู้ Kiosk",
+      queueNumber: patient?.queueNumber || "SOS-STAT",
+      symptoms:
+        patient?.chiefComplaint ||
+        customMessage ||
+        "ผู้ป่วยกดปุ่ม SOS ขอความช่วยเหลือฉุกเฉินเร่งด่วน",
+      aiSummary: ai?.summary || "",
+      department: patient?.department || ai?.recommended_specialty || "ห้องฉุกเฉิน (ER)",
+      location:
+        sourcePage === "ticket"
+          ? "จุดคัดกรอง / หน้าจอรับผล Kiosk"
+          : sourcePage === "home"
+            ? "ตู้คัดกรองหน้าหลัก (Kiosk)"
+            : sourcePage === "staff-dashboard"
+              ? "เคาน์เตอร์พยาบาล / จุดคัดกรอง"
+              : "จุดคัดกรอง Kiosk",
+      status: "active",
+      createdAt: new Date().toISOString(),
+      timeLabel: new Date().toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      patientRef: patient || null,
+    };
+
+    setEmergencyAlerts((prev) => {
+      const next = [alertObj, ...prev].slice(0, 30);
+      persistAndBroadcastAlerts(next);
+      return next;
+    });
+
+    return alertObj;
+  }
+
+  function updateEmergencyAlertStatus(alertId, nextStatus) {
+    setEmergencyAlerts((prev) => {
+      const next = prev.map((a) => (a.id === alertId ? { ...a, status: nextStatus, updatedAt: new Date().toISOString() } : a));
+      persistAndBroadcastAlerts(next);
+      return next;
+    });
+    if (nextStatus === "acknowledged") {
+      showToast("รับเรื่องฉุกเฉินแล้ว — แจ้งสถานะทีม ER กำลังเดินทางไปยังจุดคัดกรอง", "success");
+    } else if (nextStatus === "resolved") {
+      showToast("ปิดรายการแจ้งเตือนฉุกเฉินเรียบร้อยแล้ว", "success");
+    }
+  }
+
+  useEffect(() => {
+    const handleStorage = (e) => {
+      if (e.key === "joe_imed_emergency_alerts" && e.newValue) {
+        try {
+          setEmergencyAlerts(JSON.parse(e.newValue));
+        } catch {
+          // Ignore malformed JSON
+        }
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+
+    let bc = null;
+    if (typeof BroadcastChannel !== "undefined") {
+      bc = new BroadcastChannel("joe_imed_alerts");
+      bc.onmessage = (event) => {
+        if (event.data?.type === "SYNC_ALERTS" && Array.isArray(event.data.alerts)) {
+          setEmergencyAlerts(event.data.alerts);
+        }
+      };
+    }
+
+    let supaChannel = null;
+    if (!SUPABASE_URL.includes("YOUR_PROJECT")) {
+      try {
+        supaChannel = supabase
+          .channel("joe-imed-er-dispatch")
+          .on("broadcast", { event: "sync_alerts" }, ({ payload }) => {
+            if (Array.isArray(payload?.alerts)) {
+              setEmergencyAlerts(payload.alerts);
+            }
+          })
+          .subscribe();
+        alertChannelRef.current = supaChannel;
+      } catch {
+        // Ignore realtime errors in offline sandbox
+      }
+    }
+
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      if (bc) bc.close();
+      if (supaChannel) {
+        supabase.removeChannel(supaChannel);
+      }
+    };
+  }, []);
 
   function handleSelectSmartCard(profile) {
     const payload = { ...profile, timestamp: Date.now() };
@@ -759,14 +916,40 @@ export default function App() {
   }
 
   async function addPatient(form, aiAnalysis) {
-    const queueNumber = generateQueueNumber(form.severity, patients);
     const resolvedAI = aiAnalysis || generateClinicalTriage(form);
     const parsedAI = parseAIResult(resolvedAI) || generateClinicalTriage(form);
-    const recommendedDept = form.department || parsedAI?.recommended_specialty || (form.severity === "high" ? "ห้องฉุกเฉิน (ER)" : "อายุรกรรม / เวชปฏิบัติทั่วไป");
+    const isEmergency = isEmergencyTriage(form, parsedAI);
+    const resolvedSeverity = isEmergency ? "high" : (form.severity || "mid");
+    const queueNumber = generateQueueNumber(resolvedSeverity, patients);
+    const recommendedDept =
+      form.department ||
+      parsedAI?.recommended_specialty ||
+      (isEmergency ? "ห้องฉุกเฉิน (ER)" : "อายุรกรรม / เวชปฏิบัติทั่วไป");
+
+    const normalizedForm = { ...form, severity: resolvedSeverity, department: recommendedDept };
+
+    const finalizePatientRecord = (record) => {
+      setActiveTicket(record);
+      if (isEmergency) {
+        triggerEmergencyDispatch({
+          type: "AI_EMERGENCY_TRIAGE",
+          sourcePage: "intake",
+          patient: record,
+        });
+        showToast("แจ้งเตือนภาวะฉุกเฉิน! ส่งสัญญาณแจ้งทีมแพทย์ห้องฉุกเฉินและแดชบอร์ดเจ้าหน้าที่แล้ว", "error");
+        navigatePage("ticket", record);
+        if (!a11y.autoRead) {
+          // Automatically announce urgent seating & ER dispatch instructions for emergency cases
+          speakThai(getPageSpeechSummary("ticket", record));
+        }
+      } else {
+        showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
+        navigatePage("ticket", record);
+      }
+    };
 
     const fallbackPatient = {
-      ...form,
-      department: recommendedDept,
+      ...normalizedForm,
       id: Date.now(),
       dbId: Date.now(),
       queueNumber,
@@ -777,40 +960,38 @@ export default function App() {
 
     if (dbStatus === "unconfigured") {
       setPatients((prev) => [fallbackPatient, ...prev]);
-      setActiveTicket(fallbackPatient);
-      showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-      navigatePage("ticket", fallbackPatient);
+      finalizePatientRecord(fallbackPatient);
       return;
     }
 
     try {
       const { data, error } = await supabase
         .from("patients")
-        .insert([toRow({ ...form, department: recommendedDept }, resolvedAI)])
+        .insert([toRow(normalizedForm, resolvedAI)])
         .select()
         .single();
 
       if (error || !data) {
         setPatients((prev) => [fallbackPatient, ...prev]);
-        setActiveTicket(fallbackPatient);
-        showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-        navigatePage("ticket", fallbackPatient);
+        finalizePatientRecord(fallbackPatient);
         return;
       }
 
-      const savedRecord = { ...fromRow(data, patients.length), queueNumber, department: recommendedDept, aiAnalysis: resolvedAI };
+      const savedRecord = {
+        ...fromRow(data, patients.length),
+        severity: resolvedSeverity,
+        queueNumber,
+        department: recommendedDept,
+        aiAnalysis: resolvedAI,
+      };
       setPatients((prev) => {
         if (prev.find((p) => p.dbId === data.id)) return prev;
         return [savedRecord, ...prev];
       });
-      setActiveTicket(savedRecord);
-      showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-      navigatePage("ticket", savedRecord);
+      finalizePatientRecord(savedRecord);
     } catch {
       setPatients((prev) => [fallbackPatient, ...prev]);
-      setActiveTicket(fallbackPatient);
-      showToast(`ออกบัตรคิวหมายเลข ${queueNumber} เรียบร้อยแล้ว`);
-      navigatePage("ticket", fallbackPatient);
+      finalizePatientRecord(fallbackPatient);
     }
   }
 
@@ -870,6 +1051,19 @@ export default function App() {
     showToast("ออกจากระบบเจ้าหน้าที่แล้ว");
   }
 
+  function handleKioskSOS(sourcePage = "home", patient = null) {
+    triggerEmergencyDispatch({ type: "SOS_BUTTON", sourcePage, patient });
+    const sosMsg =
+      sourcePage === "staff-dashboard"
+        ? "ส่งสัญญาณฉุกเฉิน SOS แจ้งเตือนทีมพยาบาลประจำจุดแล้ว"
+        : "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง กรุณานั่งรอสักครู่ค่ะ";
+    showToast(sosMsg, "error");
+    if (sourcePage !== "staff-dashboard") {
+      speakThai(sosMsg);
+    }
+  }
+
+  const unresolvedAlertsCount = emergencyAlerts.filter((a) => a.status !== "resolved").length;
   const isStaffView = page.startsWith("staff-");
   const hasActiveA11y =
     a11y.fontScale !== "normal" || a11y.highContrast || a11y.largeTargets || a11y.autoRead;
@@ -950,10 +1144,19 @@ export default function App() {
 
               <button
                 onClick={handleStaffAccessClick}
-                className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 transition-colors"
+                className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  unresolvedAlertsCount > 0
+                    ? "border-red-300 bg-red-50 text-red-900 hover:bg-red-100"
+                    : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900"
+                }`}
               >
-                <Lock className="w-3.5 h-3.5 text-slate-500" />
-                {isStaffAuthenticated ? "แดชบอร์ดเจ้าหน้าที่" : "สำหรับบุคลากร"}
+                <Lock className={`w-3.5 h-3.5 ${unresolvedAlertsCount > 0 ? "text-red-600" : "text-slate-500"}`} />
+                <span>{isStaffAuthenticated ? "แดชบอร์ดเจ้าหน้าที่" : "สำหรับบุคลากร"}</span>
+                {unresolvedAlertsCount > 0 && (
+                  <span className="inline-flex items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white animate-pulse">
+                    {unresolvedAlertsCount}
+                  </span>
+                )}
               </button>
             </>
           ) : (
@@ -967,13 +1170,18 @@ export default function App() {
                   key={k}
                   onClick={() => navigatePage(k)}
                   aria-current={page === k ? "page" : undefined}
-                  className={`px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-md transition-colors ${
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-md transition-colors ${
                     page === k
                       ? "bg-slate-900 text-white"
                       : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
                   }`}
                 >
-                  {v}
+                  <span>{v}</span>
+                  {k === "staff-dashboard" && unresolvedAlertsCount > 0 && (
+                    <span className="inline-flex items-center justify-center rounded-full bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white animate-pulse">
+                      {unresolvedAlertsCount}
+                    </span>
+                  )}
                 </button>
               ))}
 
@@ -1032,11 +1240,7 @@ export default function App() {
             onSpeak={speakThai}
             onSpeakPage={() => speakThai(getPageSpeechSummary("home", activeTicket), true)}
             onStopSpeech={stopSpeech}
-            onTriggerSOS={() => {
-              const sosMsg = "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง";
-              showToast(sosMsg, "error");
-              if (a11y.autoRead) speakThai(sosMsg);
-            }}
+            onTriggerSOS={() => handleKioskSOS("home")}
           />
         )}
         {page === "intake" && (
@@ -1055,6 +1259,7 @@ export default function App() {
         {page === "ticket" && (
           <PatientTicketPage
             ticket={activeTicket}
+            emergencyAlerts={emergencyAlerts}
             isSpeaking={isSpeaking}
             activeHighlightSection={activeHighlightSection}
             onSpeakTicket={() => speakThai(getPageSpeechSummary("ticket", activeTicket), "ticket")}
@@ -1065,11 +1270,7 @@ export default function App() {
             }}
             onGoToIntake={() => navigatePage("intake")}
             onLookupTicket={handleLookupTicket}
-            onTriggerSOS={() => {
-              const sosMsg = "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง";
-              showToast(sosMsg, "error");
-              if (a11y.autoRead) speakThai(sosMsg);
-            }}
+            onTriggerSOS={() => handleKioskSOS("ticket", activeTicket)}
           />
         )}
 
@@ -1078,10 +1279,12 @@ export default function App() {
           <StaffDashboardHome
             setPage={navigatePage}
             patients={patients}
+            emergencyAlerts={emergencyAlerts}
+            onUpdateAlertStatus={updateEmergencyAlertStatus}
             dbStatus={dbStatus}
             onInspectPatient={handleInspectPatient}
             onDeletePatient={deletePatient}
-            onTriggerSOS={() => showToast("ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลประจำจุดแล้ว", "error")}
+            onTriggerSOS={() => handleKioskSOS("staff-dashboard")}
           />
         )}
         {page === "staff-appointments" && isStaffAuthenticated && (
@@ -2073,6 +2276,7 @@ function VoiceIntakeModal({ onClose, onSpeak, onSubmitVoicePatient }) {
 // ─── PATIENT PORTAL: REALISTIC 80MM THERMAL QUEUE SLIP PAGE ───────────────────
 function PatientTicketPage({
   ticket,
+  emergencyAlerts = [],
   onStartNew,
   onGoToIntake,
   onLookupTicket,
@@ -2150,7 +2354,7 @@ function PatientTicketPage({
   }
 
   const aiResult = parseAIResult(ticket.aiAnalysis);
-  const isHighRisk = ticket.severity === "high" || aiResult?.risk_level === "ฉุกเฉิน";
+  const isHighRisk = isEmergencyTriage(ticket, aiResult);
   const departmentName =
     ticket.department || aiResult?.recommended_specialty || "อายุรกรรม";
   const assignedRoom = getAssignedRoom(departmentName, ticket.severity);
@@ -2160,6 +2364,161 @@ function PatientTicketPage({
   const buildingLocation = isHighRisk
     ? "อาคารอุบัติเหตุ-ฉุกเฉิน ชั้น 1"
     : "อาคารผู้ป่วยนอก (OPD) ชั้น 2";
+
+  // Check if staff acknowledged this ER dispatch in Staff Dashboard
+  const matchedAlert = (emergencyAlerts || []).find(
+    (a) => a.queueNumber === ticket.queueNumber && a.status !== "resolved"
+  );
+  const isErAcknowledged = matchedAlert?.status === "acknowledged";
+
+  // ─── EMERGENCY DISPATCH VIEW (AUTO-SKIPS PRINT QUEUE CARD) ───
+  if (isHighRisk) {
+    return (
+      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <div className="inline-flex items-center gap-2 rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-extrabold text-red-900">
+            <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping" />
+            <span>
+              {isErAcknowledged
+                ? "เจ้าหน้าที่ห้องฉุกเฉินรับเรื่องแล้ว — ทีม ER กำลังเดินทางมาหาท่าน"
+                : "ส่งสัญญาณฉุกเฉินถึงทีมแพทย์ ER และแดชบอร์ดเจ้าหน้าที่แล้ว"}
+            </span>
+          </div>
+
+          {onSpeakTicket && (
+            <button
+              type="button"
+              onClick={isSpeaking ? onStopSpeech : onSpeakTicket}
+              className="inline-flex items-center gap-2 rounded-lg border-2 border-slate-900 bg-amber-300 px-3.5 py-2 text-xs sm:text-sm font-extrabold text-slate-950 hover:bg-amber-400 transition-colors shadow-sm"
+            >
+              {isSpeaking ? (
+                <>
+                  <VolumeX className="w-4 h-4 text-red-700 shrink-0" />
+                  <span>หยุดเสียงคำแนะนำ</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-4 h-4 text-slate-950 shrink-0" />
+                  <span>ฟังคำแนะนำฉุกเฉิน</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+
+        <div className="rounded-xl border-2 border-red-600 bg-white shadow-lg overflow-hidden">
+          <div className="bg-red-600 px-5 sm:px-6 py-5 text-white">
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+              <div className="inline-flex items-center gap-2 rounded bg-red-800/80 px-2.5 py-1 text-xs font-bold tracking-wide">
+                <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0" />
+                <span>ระบบคัดกรองภาวะฉุกเฉินเร่งด่วน (ESI 1–2)</span>
+              </div>
+              <span className="rounded bg-white px-3 py-1 text-xs sm:text-sm font-black text-red-700">
+                รหัส ER: {ticket.queueNumber || "ER-STAT"}
+              </span>
+            </div>
+
+            <h2 className="text-xl sm:text-2xl font-black tracking-tight leading-snug">
+              บุคลากรห้องฉุกเฉิน (ER Personnel) กำลังเดินทางมาหาท่าน
+            </h2>
+            <p className="text-xs sm:text-sm text-red-100 mt-1.5">
+              ไม่ต้องกดพิมพ์บัตรคิว และไม่ต้องเดินไปต่อคิวที่แผนกปกติ — ข้อมูลของท่านถูกส่งไปยังทีมพยาบาลแล้ว
+            </p>
+          </div>
+
+          <div className="p-5 sm:p-6 space-y-5">
+            {/* Calm, easy-to-follow instructions for patients */}
+            <div className="rounded-lg border border-red-200 bg-red-50/70 p-4 space-y-3">
+              <div className="text-xs sm:text-sm font-extrabold text-red-950">
+                ข้อปฏิบัติทันทีระหว่างรอทีมฉุกเฉิน:
+              </div>
+              <div className="space-y-2.5 text-xs sm:text-sm text-slate-900">
+                <div className="flex items-start gap-2.5">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[11px] font-bold text-white">
+                    1
+                  </span>
+                  <span>
+                    <strong>กรุณาหาที่นั่งพักหรือเก้าอี้บริเวณจุดคัดกรองทันที</strong> หลีกเลี่ยงการเดินขึ้นลงบันไดหรือออกแรง
+                  </span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[11px] font-bold text-white">
+                    2
+                  </span>
+                  <span>
+                    <strong>ไม่ต้องพิมพ์บัตรคิว</strong> พยาบาลและเจ้าหน้าที่เคลื่อนย้ายผู้ป่วยจะมารับท่านตามข้อมูลที่แจ้งเข้าสู่ห้องฉุกเฉินโดยตรง
+                  </span>
+                </div>
+                <div className="flex items-start gap-2.5">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600 text-[11px] font-bold text-white">
+                    3
+                  </span>
+                  <span>
+                    หากรู้สึกหน้ามืด แน่นหน้าอกมากขึ้น หรือหายใจติดขัด โปรดแจ้งบุคคลใกล้เคียงหรือกดปุ่ม{" "}
+                    <strong>SOS เรียกซ้ำ</strong> ด้านล่าง
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Patient & AI Dispatch Summary */}
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-xs sm:text-sm space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap border-b border-slate-200 pb-2">
+                <div>
+                  <span className="text-slate-500 font-semibold">ผู้ป่วย: </span>
+                  <span className="font-bold text-slate-900">
+                    คุณ{ticket.firstName} {ticket.lastName} ({ticket.age || "—"} ปี)
+                  </span>
+                </div>
+                <span className="rounded bg-slate-200 px-2 py-0.5 text-[11px] font-bold text-slate-800">
+                  ส่งต่อไปยัง: {departmentName}
+                </span>
+              </div>
+
+              {hasAllergy && (
+                <div className="flex items-center gap-1.5 rounded border border-red-300 bg-red-50 px-2.5 py-1.5 text-xs font-bold text-red-800">
+                  <AlertTriangle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+                  <span>ประวัติแพ้ยาสำคัญ: {ticket.allergies}</span>
+                </div>
+              )}
+
+              {aiResult?.summary && (
+                <div className="text-xs text-slate-700 leading-relaxed">
+                  <span className="font-bold text-slate-900">ผลประเมินเบื้องต้น: </span>
+                  {aiResult.summary}
+                </div>
+              )}
+
+              {aiResult?._ai_provider && (
+                <div className="text-[11px] text-slate-500">
+                  ระบบวิเคราะห์: {aiResult._ai_provider}
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-2 flex-wrap">
+              <button
+                type="button"
+                onClick={onTriggerSOS}
+                className="inline-flex items-center gap-2 rounded-lg border-2 border-red-800 bg-red-600 px-4 py-2.5 text-xs sm:text-sm font-extrabold text-white hover:bg-red-700 transition-colors shadow-sm"
+              >
+                <Bell className="w-4 h-4 text-white shrink-0 animate-pulse" />
+                <span>SOS เรียกพยาบาลฉุกเฉินซ้ำทันที</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onStartNew}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              >
+                กลับสู่หน้าหลักผู้ป่วย
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Calculate realistic estimated doctor consultation time (+15 mins from ticket time, or immediate for ER)
   const todayThaiDate = ticket.dateLabel || "วันนี้ (เฉพาะวันที่ออกบัตร)";
@@ -2651,9 +3010,19 @@ function DbStatusBadge({ status, onRetry }) {
 }
 
 // ─── STAFF CLINICAL DASHBOARD HOME ────────────────────────────────────────────
-function StaffDashboardHome({ setPage, patients, dbStatus, onInspectPatient, onDeletePatient, onTriggerSOS }) {
+function StaffDashboardHome({
+  setPage,
+  patients,
+  emergencyAlerts = [],
+  onUpdateAlertStatus,
+  dbStatus,
+  onInspectPatient,
+  onDeletePatient,
+  onTriggerSOS,
+}) {
   const highRiskPatients = patients.filter((p) => p.severity === "high");
   const highCount = highRiskPatients.length;
+  const activeAlerts = (emergencyAlerts || []).filter((a) => a.status !== "resolved");
   const isUnconfigured = dbStatus === "unconfigured";
 
   return (
@@ -2733,6 +3102,99 @@ function StaffDashboardHome({ setPage, patients, dbStatus, onInspectPatient, onD
           </button>
         </div>
       </header>
+
+      {/* Live ER & SOS Kiosk Dispatch Feed */}
+      {activeAlerts.length > 0 && (
+        <section className="mb-6 rounded-lg border-2 border-red-600 bg-red-50/70 p-4 sm:p-5 shadow-sm">
+          <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className="w-2.5 h-2.5 rounded-full bg-red-600 animate-ping shrink-0" />
+              <h2 className="text-sm sm:text-base font-extrabold text-red-950">
+                แจ้งเตือนฉุกเฉิน &amp; SOS จากตู้คัดกรอง ({activeAlerts.length} รายการ)
+              </h2>
+            </div>
+            <span className="rounded bg-red-600 px-2.5 py-0.5 text-[11px] font-bold text-white">
+              Real-time ER Link Active
+            </span>
+          </div>
+
+          <div className="space-y-2.5">
+            {activeAlerts.map((alert) => {
+              const isAcknowledged = alert.status === "acknowledged";
+              const isSOS = alert.type === "SOS_BUTTON";
+              return (
+                <div
+                  key={alert.id}
+                  className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-md border p-3.5 bg-white ${
+                    isAcknowledged ? "border-amber-400" : "border-red-300"
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span
+                        className={`rounded px-2 py-0.5 text-[10px] font-extrabold text-white ${
+                          isSOS ? "bg-red-600" : "bg-slate-900"
+                        }`}
+                      >
+                        {isSOS ? "ปุ่ม SOS เรียกพยาบาล" : "AI คัดกรองฉุกเฉิน (ER)"}
+                      </span>
+                      <span className="text-xs font-extrabold text-slate-900">
+                        {alert.patientName} ({alert.queueNumber})
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        เวลา {alert.timeLabel || "เมื่อสักครู่"} · {alert.location}
+                      </span>
+                      {isAcknowledged && (
+                        <span className="rounded border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                          รับเรื่องแล้ว — ทีม ER กำลังไป
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-700">
+                      <strong>อาการ/รายละเอียด:</strong> {alert.symptoms}
+                    </p>
+                    {alert.aiSummary && (
+                      <p className="text-[11px] text-slate-600">
+                        <strong>สรุปจาก AI:</strong> {alert.aiSummary}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    {alert.patientRef && (
+                      <button
+                        type="button"
+                        onClick={() => onInspectPatient(alert.patientRef)}
+                        className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                      >
+                        ดูข้อมูลผู้ป่วย
+                      </button>
+                    )}
+                    {!isAcknowledged && onUpdateAlertStatus && (
+                      <button
+                        type="button"
+                        onClick={() => onUpdateAlertStatus(alert.id, "acknowledged")}
+                        className="rounded-md bg-amber-400 px-3 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-500"
+                      >
+                        รับเรื่อง / ส่งทีม ER แล้ว
+                      </button>
+                    )}
+                    {onUpdateAlertStatus && (
+                      <button
+                        type="button"
+                        onClick={() => onUpdateAlertStatus(alert.id, "resolved")}
+                        className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                      >
+                        ดำเนินการเสร็จสิ้น
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* Asymmetric Clinical Metrics Layout: Simple Number Card + Prominent Flat Red Alert Banner */}
       <section
@@ -3343,7 +3805,11 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
 
   async function submit() {
     setSaving(true);
-    const finalAI = aiResult || generateClinicalTriage(form);
+    let finalAI = aiResult;
+    if (!finalAI || finalAI.mode !== "result_mode") {
+      const prompt = formatPatientPrompt(form, bmi);
+      finalAI = await callAI(prompt, form);
+    }
     await onSubmit(form, finalAI);
     if (onClearSmartCard) onClearSmartCard();
     setSaving(false);
@@ -3627,7 +4093,14 @@ function IntakePage({ onSubmit, smartCardData, onClearSmartCard, onOpenSmartCard
               )}
               {aiResult && aiResult.status === "success" && aiResult.mode === "result_mode" && (
                 <div className="ai-result">
-                  <div className="ai-result-header">ผลการประเมินเบื้องต้นจาก AI</div>
+                  <div className="ai-result-header flex items-center justify-between gap-2 flex-wrap">
+                    <span>ผลการประเมินเบื้องต้นจาก AI</span>
+                    {aiResult._ai_provider && (
+                      <span className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                        {aiResult._ai_provider}
+                      </span>
+                    )}
+                  </div>
                   <div className="ai-metrics-grid">
                     <div className="ai-metric-card">
                       <div className="ai-metric-label">ระดับความเสี่ยง</div>
