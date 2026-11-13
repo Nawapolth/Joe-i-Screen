@@ -465,6 +465,7 @@ export default function App() {
   const [smartCardData, setSmartCardData] = useState(null);
   const [showSmartCardModal, setShowSmartCardModal] = useState(false);
   const [bridgeConnected, setBridgeConnected] = useState(false);
+  const [activeSosAlertId, setActiveSosAlertId] = useState(null);
 
   const [emergencyAlerts, setEmergencyAlerts] = useState(() => {
     try {
@@ -1052,16 +1053,28 @@ export default function App() {
   }
 
   function handleKioskSOS(sourcePage = "home", patient = null) {
-    triggerEmergencyDispatch({ type: "SOS_BUTTON", sourcePage, patient });
+    const createdAlert = triggerEmergencyDispatch({ type: "SOS_BUTTON", sourcePage, patient });
     const sosMsg =
       sourcePage === "staff-dashboard"
         ? "ส่งสัญญาณฉุกเฉิน SOS แจ้งเตือนทีมพยาบาลประจำจุดแล้ว"
-        : "ส่งสัญญาณฉุกเฉิน SOS เรียกพยาบาลแล้ว เจ้าหน้าที่กำลังเดินทางมายังจุดคัดกรอง กรุณานั่งรอสักครู่ค่ะ";
-    showToast(sosMsg, "error");
-    if (sourcePage !== "staff-dashboard") {
+        : "ส่งสัญญาณฉุกเฉิน เอสโอเอส เรียกพยาบาลแล้วค่ะ เจ้าหน้าที่ห้องฉุกเฉินกำลังเดินทางมายังจุดคัดกรอง กรุณาหาที่นั่งพัก และขอความร่วมมือผู้ที่อยู่ใกล้เคียงช่วยประคองและดูแลผู้ป่วยระหว่างรอเจ้าหน้าที่ด้วยค่ะ";
+
+    if (sourcePage === "staff-dashboard") {
+      showToast(sosMsg, "error");
+    } else {
+      setActiveSosAlertId(createdAlert.id);
       speakThai(sosMsg);
     }
   }
+
+  const activeSosOverlayAlert = activeSosAlertId
+    ? emergencyAlerts.find((a) => a.id === activeSosAlertId) || {
+        id: activeSosAlertId,
+        status: "active",
+        timeLabel: new Date().toLocaleTimeString("th-TH"),
+        location: "จุดคัดกรอง Kiosk",
+      }
+    : null;
 
   const unresolvedAlertsCount = emergencyAlerts.filter((a) => a.status !== "resolved").length;
   const isStaffView = page.startsWith("staff-");
@@ -1333,6 +1346,104 @@ export default function App() {
             showToast("เข้าสู่ระบบสำหรับบุคลากรเรียบร้อยแล้ว");
           }}
         />
+      )}
+
+      {activeSosOverlayAlert && !isStaffView && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-label="แจ้งเตือนเหตุฉุกเฉิน SOS เรียกพยาบาลด่วน"
+          className="fixed inset-0 z-[100] flex flex-col justify-between bg-red-700 text-white p-5 sm:p-10 overflow-y-auto"
+        >
+          {/* Top Status Bar */}
+          <div className="max-w-4xl w-full mx-auto flex items-center justify-between gap-3 flex-wrap border-b border-red-500/70 pb-4">
+            <div className="inline-flex items-center gap-2.5 rounded-full bg-white px-4 py-1.5 text-xs sm:text-sm font-black text-red-700 shadow-md">
+              <span className="w-3 h-3 rounded-full bg-red-600 animate-ping" />
+              <span>
+                {activeSosOverlayAlert.status === "acknowledged"
+                  ? "เจ้าหน้าที่รับสัญญาณแล้ว — ทีมแพทย์ ER กำลังมา"
+                  : activeSosOverlayAlert.status === "resolved"
+                    ? "เจ้าหน้าที่เข้าดูแลเรียบร้อยแล้ว"
+                    : "SOS EMERGENCY • ส่งสัญญาณถึงพยาบาลและห้องฉุกเฉินแล้ว"}
+              </span>
+            </div>
+            <div className="text-xs sm:text-sm font-bold text-red-100">
+              เวลาแจ้งเหตุ: {activeSosOverlayAlert.timeLabel || "เมื่อสักครู่"} · {activeSosOverlayAlert.location}
+            </div>
+          </div>
+
+          {/* Giant Center Message for Patient & Bystanders */}
+          <div className="max-w-4xl w-full mx-auto my-6 space-y-6">
+            <div className="flex items-start sm:items-center gap-4">
+              <div className="flex h-16 w-16 sm:h-20 sm:w-20 shrink-0 items-center justify-center rounded-2xl bg-white text-red-700 shadow-lg">
+                <Bell className="w-9 h-9 sm:w-11 sm:h-11 animate-bounce" />
+              </div>
+              <div>
+                <div className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-amber-300 mb-1">
+                  EMERGENCY ASSISTANCE REQUESTED / แจ้งขอความช่วยเหลือฉุกเฉิน
+                </div>
+                <h1 className="text-3xl sm:text-5xl font-black tracking-tight leading-tight text-white">
+                  ต้องการความช่วยเหลือด่วน! ทีมฉุกเฉินกำลังเดินทางมาที่นี่
+                </h1>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Box 1: For the Patient */}
+              <div className="rounded-xl bg-white text-slate-900 p-5 sm:p-6 shadow-xl border-2 border-red-200">
+                <div className="text-sm sm:text-base font-black text-red-700 mb-2">
+                  สำหรับผู้ป่วย (For Patient)
+                </div>
+                <ul className="space-y-2 text-sm sm:text-base font-bold text-slate-800">
+                  <li>1. กรุณานั่งพักบนเก้าอี้หรือพิงพนักบริเวณนี้ทันที</li>
+                  <li>2. ห้ามเดินไปมาหรือฝืนเคลื่อนย้ายตัวเอง</li>
+                  <li>3. สัญญาณถูกส่งไปที่แดชบอร์ดพยาบาลแล้ว</li>
+                </ul>
+              </div>
+
+              {/* Box 2: For Bystanders / Passersby */}
+              <div className="rounded-xl bg-amber-300 text-slate-950 p-5 sm:p-6 shadow-xl border-2 border-amber-100">
+                <div className="text-sm sm:text-base font-black text-slate-950 mb-2">
+                  สำหรับผู้ที่อยู่ใกล้เคียง (For Bystanders — Please Assist)
+                </div>
+                <ul className="space-y-2 text-sm sm:text-base font-extrabold text-slate-950">
+                  <li>1. ช่วยประคองผู้ป่วยให้นั่งลงในท่าที่สบาย</li>
+                  <li>2. สอบถามอาการและเฝ้าสังเกตการหายใจ/ความรู้สึกตัว</li>
+                  <li>3. หากผู้ป่วยหมดสติ โปรดตะโกนเรียกพยาบาลประจำจุดทันที</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          {/* Persistent Action Footer (Stays until explicitly dismissed) */}
+          <div className="max-w-4xl w-full mx-auto flex items-center justify-between gap-3 flex-wrap border-t border-red-500/70 pt-4">
+            <button
+              type="button"
+              onClick={() =>
+                speakThai(
+                  "ส่งสัญญาณฉุกเฉิน เอสโอเอส เรียกพยาบาลแล้วค่ะ เจ้าหน้าที่ห้องฉุกเฉินกำลังเดินทางมายังจุดคัดกรอง กรุณาหาที่นั่งพัก และขอความร่วมมือผู้ที่อยู่ใกล้เคียงช่วยประคองผู้ป่วยระหว่างรอเจ้าหน้าที่ด้วยค่ะ"
+                )
+              }
+              className="inline-flex items-center gap-2 rounded-xl bg-amber-300 px-5 py-3 text-sm sm:text-base font-black text-slate-950 hover:bg-amber-400 transition-colors shadow-lg"
+            >
+              <Volume2 className="w-5 h-5 shrink-0" />
+              <span>เล่นเสียงประกาศเรียกผู้ช่วยเหลือซ้ำ</span>
+            </button>
+
+            <div className="flex items-center gap-2.5 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveSosAlertId(null);
+                  stopSpeech();
+                }}
+                className="rounded-xl border-2 border-white bg-red-800/80 px-5 py-3 text-sm sm:text-base font-bold text-white hover:bg-red-900 transition-colors"
+              >
+                ปิดหน้าจอแจ้งเตือน (เมื่อเจ้าหน้าที่มาถึง)
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {toast && (
